@@ -1,0 +1,34 @@
+{
+  "name": "meetey",
+  "version": "1.0.0",
+  "description": "Local-first meeting capture and transcription for Claude Code",
+  "type": "module",
+  "author": "John Joseph",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jej2k5/meetey.git"
+  },
+  "homepage": "https://github.com/jej2k5/meetey#readme",
+  "bugs": {
+    "url": "https://github.com/jej2k5/meetey/issues"
+  },
+  "bin": {
+    "meetey": "./cli/index.js"
+  },
+  "files": [
+    "cli/",
+    "mcp-server/index.js",
+    "mcp-server/package.json",
+    "meetey-capture/Sources",
+    "meetey-capture/Package.swift",
+    "meetey-capture/entitlements.plist",
+    "skill/SKILL.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["claude", "mcp", "meeting", "transcription", "whisper"],
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,25 @@
+# Swift build output
+.build/
+*.xcodeproj
+.swiftpm/
+DerivedData/
+
+# Node
+node_modules/
+npm-debug.log*
+.npm/
+
+# Meetey runtime artifacts — recordings and transcripts are private meeting data
+# and must never be committed.
+*.wav
+*.wav.json
+recordings/
+models/
+*.bin
+
+# Local Claude Code settings — machine-specific paths and permissions.
+# The shared .claude/settings.json (if any) is committed; the .local one is not.
+.claude/settings.local.json
+
+# macOS
+.DS_Store
