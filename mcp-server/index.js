@@ -49,6 +49,24 @@ function wavPath(id) {
   return join(RECORDINGS_DIR, `${id}.wav`);
 }
 
+function framesPath(id) {
+  return join(RECORDINGS_DIR, `${id}-frames`);
+}
+
+function readFrameIndex(framesDir) {
+  const indexPath = join(framesDir, "index.json");
+  if (!existsSync(indexPath)) return null;
+  try {
+    const index = JSON.parse(readFileSync(indexPath, "utf8"));
+    return {
+      ...index,
+      frames: (index.frames ?? []).map((f) => ({ ...f, path: join(framesDir, f.file) })),
+    };
+  } catch (e) {
+    return { error: `Could not parse ${indexPath}: ${e.message}` };
+  }
+}
+
 function runCaptureBinary(args) {
   return execFileSync(CAPTURE_BINARY, args, { encoding: "utf8" });
 }
@@ -71,7 +89,7 @@ function listApps() {
   }
 }
 
-function startRecording({ bundleID, stopAfter }) {
+function startRecording({ bundleID, stopAfter, captureVideo = false, fps, maxFrames }) {
   if (activeRecording) {
     return { error: "A recording is already active. Call stop_recording first." };
   }
@@ -83,6 +101,15 @@ function startRecording({ bundleID, stopAfter }) {
   const outputPath = wavPath(id);
   const args = ["--app", bundleID, "--output", outputPath];
   if (stopAfter) args.push("--stop-after", String(stopAfter));
+
+  // Video is opt-in per recording. There is deliberately no env var or config
+  // file that can turn it on by default — it must be requested every time.
+  const framesDir = captureVideo ? framesPath(id) : null;
+  if (captureVideo) {
+    args.push("--video", "--frames-dir", framesDir);
+    if (fps) args.push("--fps", String(fps));
+    if (maxFrames) args.push("--max-frames", String(maxFrames));
+  }
 
   const child = spawn(CAPTURE_BINARY, args, {
     stdio: ["ignore", "ignore", "pipe"],
@@ -97,14 +124,24 @@ function startRecording({ bundleID, stopAfter }) {
     }
   });
 
-  activeRecording = { process: child, outputPath, sessionId: id, startedAt: new Date().toISOString() };
+  activeRecording = {
+    process: child,
+    outputPath,
+    framesDir,
+    sessionId: id,
+    startedAt: new Date().toISOString(),
+  };
 
   return {
     sessionId: id,
     outputPath,
     bundleID,
+    capturingVideo: captureVideo,
+    framesDir,
     startedAt: activeRecording.startedAt,
-    message: `Recording started. Call stop_recording when the meeting ends.`,
+    message: captureVideo
+      ? "Recording started with screen capture. Call stop_recording when the meeting ends."
+      : "Recording started (audio only). Call stop_recording when the meeting ends.",
   };
 }
 
@@ -113,24 +150,47 @@ function stopRecording() {
     return { error: "No active recording." };
   }
 
-  const { process: child, outputPath, sessionId: id, startedAt } = activeRecording;
+  const { process: child, outputPath, framesDir, sessionId: id, startedAt } = activeRecording;
 
   child.kill("SIGTERM");
   activeRecording = null;
 
-  // Give the process a moment to finalize the WAV header
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline && !existsSync(outputPath)) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
+  // Give the process a moment to finalize the WAV header, and — when video is
+  // on — to drain the encode queue and write the frame manifest.
+  const wait = (ms, done) => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline && !done()) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  };
+  wait(3000, () => existsSync(outputPath));
+  if (framesDir) wait(10000, () => existsSync(join(framesDir, "index.json")));
 
-  return {
+  const result = {
     sessionId: id,
     outputPath,
     startedAt,
     stoppedAt: new Date().toISOString(),
     message: `Recording saved to ${outputPath}. Call transcribe with this path.`,
   };
+
+  if (framesDir) {
+    const index = readFrameIndex(framesDir);
+    result.framesDir = framesDir;
+    if (!index) {
+      result.keyframeCount = 0;
+      result.frameIndexMissing = true;
+    } else if (index.error) {
+      result.keyframeCount = 0;
+      result.frameIndexError = index.error;
+    } else {
+      result.keyframeCount = index.frameCount ?? index.frames.length;
+      result.truncated = index.truncated === true;
+    }
+    result.message += ` ${result.keyframeCount} keyframe(s) captured — call get_keyframes for screen content.`;
+  }
+
+  return result;
 }
 
 function transcribe({ wavPath: filePath }) {
@@ -156,15 +216,36 @@ function transcribe({ wavPath: filePath }) {
     }
 
     const raw = JSON.parse(readFileSync(jsonPath, "utf8"));
-    const transcript = (raw.transcription ?? raw.segments ?? [])
-      .map((s) => s.text ?? s.sentence ?? "")
-      .join(" ")
-      .trim();
+    const rawSegments = raw.transcription ?? raw.segments ?? [];
 
-    return { transcript, jsonPath };
+    // whisper.cpp reports offsets in milliseconds under `offsets`. Keeping them
+    // is what lets the skill interleave keyframes with what was being said.
+    const segments = rawSegments.map((s) => ({
+      text: (s.text ?? s.sentence ?? "").trim(),
+      fromMs: s.offsets?.from ?? null,
+      toMs: s.offsets?.to ?? null,
+    })).filter((s) => s.text.length > 0);
+
+    const transcript = segments.map((s) => s.text).join(" ").trim();
+
+    return { transcript, segments, jsonPath };
   } catch (e) {
     return { error: e.message };
   }
+}
+
+function getKeyframes({ framesDir, sessionId: id }) {
+  const dir = framesDir ?? (id ? framesPath(id) : null);
+  if (!dir) {
+    return { error: "Provide either framesDir or sessionId." };
+  }
+  if (!existsSync(dir)) {
+    return { error: `No keyframe directory at ${dir}. Was the recording started with captureVideo?` };
+  }
+  const index = readFrameIndex(dir);
+  if (!index) return { error: `No index.json in ${dir}. The capture may not have finished cleanly.` };
+  if (index.error) return { error: index.error };
+  return index;
 }
 
 function getStatus() {
@@ -175,6 +256,8 @@ function getStatus() {
     active: true,
     sessionId: activeRecording.sessionId,
     outputPath: activeRecording.outputPath,
+    capturingVideo: activeRecording.framesDir !== null,
+    framesDir: activeRecording.framesDir,
     startedAt: activeRecording.startedAt,
   };
 }
@@ -195,7 +278,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "start_recording",
-      description: "Start capturing audio from a meeting app.",
+      description: "Start capturing audio from a meeting app, and optionally screen keyframes.",
       inputSchema: {
         type: "object",
         required: ["bundleID"],
@@ -208,6 +291,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Auto-stop after this many seconds of recording (optional).",
           },
+          captureVideo: {
+            type: "boolean",
+            description:
+              "Also capture screen keyframes (slides, screen shares, code). Off by default. " +
+              "Must be requested per recording — the user has to opt in each time, and should " +
+              "be warned that everything the target app displays is captured, including other " +
+              "tabs and notifications.",
+          },
+          fps: {
+            type: "number",
+            description: "Frames sampled per second when captureVideo is on (default 1).",
+          },
+          maxFrames: {
+            type: "number",
+            description: "Cap on keyframes per session when captureVideo is on (default 200).",
+          },
         },
       },
     },
@@ -218,12 +317,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "transcribe",
-      description: "Transcribe a WAV file using whisper.cpp running locally.",
+      description:
+        "Transcribe a WAV file using whisper.cpp running locally. Returns the full " +
+        "transcript plus timestamped segments.",
       inputSchema: {
         type: "object",
         required: ["wavPath"],
         properties: {
           wavPath: { type: "string", description: "Absolute path to the WAV file." },
+        },
+      },
+    },
+    {
+      name: "get_keyframes",
+      description:
+        "Read the screen keyframes captured during a recording: file paths, millisecond " +
+        "offsets, and locally-recognized text (OCR) for each. Only available when the " +
+        "recording was started with captureVideo.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          framesDir: { type: "string", description: "Frames directory from stop_recording." },
+          sessionId: { type: "string", description: "Session ID, if framesDir is unknown." },
         },
       },
     },
@@ -244,6 +359,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case "start_recording": result = startRecording(args); break;
     case "stop_recording":  result = stopRecording(); break;
     case "transcribe":      result = transcribe(args); break;
+    case "get_keyframes":   result = getKeyframes(args); break;
     case "get_status":      result = getStatus(); break;
     default:
       return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
