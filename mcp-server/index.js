@@ -22,6 +22,9 @@ import { existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { basename, join, resolve } from "path";
 import { assessQuality, formatDuration, wavDurationMs } from "./quality.js";
+import {
+  deleteRecording, getRecording, listRecordings, searchRecordings, systemStatus,
+} from "./library.js";
 
 // --- Config ---
 
@@ -33,6 +36,11 @@ const MODEL_PATH = process.env.MEETEY_MODEL ?? join(MEETEY_DIR, "models", "ggml-
 const scriptDir = new URL(".", import.meta.url).pathname;
 const CAPTURE_BINARY = process.env.MEETEY_BINARY ??
   resolve(scriptDir, "../meetey-capture/.build/release/meetey-capture");
+
+// Admin surface only — these are inspected, never written, by this server.
+const CLAUDE_JSON = join(HOME, ".claude.json");
+const SKILL_PATH = join(HOME, ".claude", "skills", "meetey", "SKILL.md");
+const KEYBINDINGS = join(HOME, ".claude", "keybindings.json");
 
 mkdirSync(RECORDINGS_DIR, { recursive: true });
 
@@ -275,6 +283,52 @@ function getStatus() {
   };
 }
 
+// --- Admin handlers ---
+
+function adminList(args = {}) {
+  return listRecordings(RECORDINGS_DIR, args);
+}
+
+function adminGet(args = {}) {
+  if (!args.sessionId && !args.date) {
+    return { error: "Provide either sessionId or date (YYYY-MM-DD)." };
+  }
+  return getRecording(RECORDINGS_DIR, args);
+}
+
+function adminSearch(args = {}) {
+  return searchRecordings(RECORDINGS_DIR, args.query, {
+    limit: args.limit,
+    scope: args.scope,
+  });
+}
+
+function adminDelete(args = {}) {
+  if (!args.sessionId) return { error: "Provide a sessionId." };
+  if (activeRecording?.sessionId === args.sessionId) {
+    return { error: "That recording is still active. Call stop_recording first." };
+  }
+  return deleteRecording(RECORDINGS_DIR, args);
+}
+
+function adminStatus() {
+  return systemStatus({
+    recordingsDir: RECORDINGS_DIR,
+    captureBinary: CAPTURE_BINARY,
+    modelPath: MODEL_PATH,
+    claudeJsonPath: CLAUDE_JSON,
+    skillPath: SKILL_PATH,
+    keybindingsPath: KEYBINDINGS,
+    activeRecording: activeRecording
+      ? {
+          sessionId: activeRecording.sessionId,
+          startedAt: activeRecording.startedAt,
+          capturingVideo: activeRecording.framesDir !== null,
+        }
+      : null,
+  });
+}
+
 // --- MCP server ---
 
 const server = new Server(
@@ -361,6 +415,85 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "Check whether a recording is currently active.",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "list_recordings",
+      description:
+        "Browse the meeting library: every past recording with its title, date, duration, " +
+        "transcript quality, keyframe count, and disk size. Newest first. Use this to answer " +
+        "'what meetings do I have' or to find a session ID for the other admin tools.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since: { type: "string", description: "Only recordings on or after this date (YYYY-MM-DD)." },
+          until: { type: "string", description: "Only recordings on or before this date (YYYY-MM-DD)." },
+          hasVideo: { type: "boolean", description: "Filter to recordings with (true) or without (false) screen capture." },
+          quality: {
+            type: "string",
+            enum: ["good", "fair", "poor", "unusable"],
+            description: "Only recordings whose transcript scored this quality level.",
+          },
+          limit: { type: "number", description: "Return at most this many (still reports the full match count)." },
+        },
+      },
+    },
+    {
+      name: "get_recording",
+      description:
+        "Full detail for one recording, including the complete notes markdown and the paths " +
+        "to its audio, transcript, and keyframes. Identify it by sessionId, or by date when " +
+        "there was only one meeting that day.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string", description: "e.g. meetey-1754049600000" },
+          date: { type: "string", description: "YYYY-MM-DD, when the session ID isn't known." },
+        },
+      },
+    },
+    {
+      name: "search_recordings",
+      description:
+        "Search across every meeting's notes and transcripts. Returns the matching line with " +
+        "its [mm:ss] offset where there is one, so you land on the moment rather than just the " +
+        "meeting. Use this for questions like 'what did we decide about the API cutover'.",
+      inputSchema: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "Text to find (case-insensitive)." },
+          scope: {
+            type: "string",
+            enum: ["all", "notes", "transcripts"],
+            description: "Where to look. Default all. 'notes' is decisions and action items only.",
+          },
+          limit: { type: "number", description: "Max matches to return (default 40)." },
+        },
+      },
+    },
+    {
+      name: "delete_recording",
+      description:
+        "Permanently delete a recording's audio, keyframes, notes, and transcript. Describes " +
+        "what it would remove and deletes nothing unless confirm is true — always show the user " +
+        "that list and get their agreement before confirming.",
+      inputSchema: {
+        type: "object",
+        required: ["sessionId"],
+        properties: {
+          sessionId: { type: "string", description: "Session to delete." },
+          confirm: { type: "boolean", description: "Must be true to actually delete. Omit for a dry run." },
+          keepNotes: { type: "boolean", description: "Delete the audio and keyframes but keep the notes and transcript." },
+        },
+      },
+    },
+    {
+      name: "system_status",
+      description:
+        "Health of the whole install: capture binary and its signature, whisper-cli, the model, " +
+        "MCP registration, skill, hotkeys, Screen Recording permission, plus disk used by the " +
+        "library. Use this first when anything isn't working.",
+      inputSchema: { type: "object", properties: {} },
+    },
   ],
 }));
 
@@ -375,6 +508,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     case "transcribe":      result = transcribe(args); break;
     case "get_keyframes":   result = getKeyframes(args); break;
     case "get_status":      result = getStatus(); break;
+    case "list_recordings":   result = adminList(args); break;
+    case "get_recording":     result = adminGet(args); break;
+    case "search_recordings": result = adminSearch(args); break;
+    case "delete_recording":  result = adminDelete(args); break;
+    case "system_status":     result = adminStatus(); break;
     default:
       return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown tool: ${name}` }) }], isError: true };
   }

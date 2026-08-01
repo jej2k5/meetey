@@ -36,7 +36,22 @@ User → /meetey (skill) → MCP server (Node.js) → meetey-capture (Swift CLI)
 
 **`meetey-capture/`** — Swift CLI using ScreenCaptureKit. Takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, stops on SIGTERM/SIGINT or after `--stop-after <seconds>` of wall-clock time. Also supports `--list-apps` (prints running supported apps as JSON), `--selftest` (exercises the keyframe pipeline with synthetic frames, no permission needed), and the `--video` flags below. Requires macOS 13+.
 
-**`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Exposes six tools: `list_apps`, `start_recording`, `stop_recording`, `transcribe`, `get_keyframes`, `get_status`. Registered globally in `~/.claude.json` by the installer.
+**`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` by the installer. Eleven tools in two groups:
+
+| Capture | Admin |
+|---|---|
+| `list_apps` | `list_recordings` |
+| `start_recording` | `get_recording` |
+| `stop_recording` | `search_recordings` |
+| `transcribe` | `delete_recording` |
+| `get_keyframes` | `system_status` |
+| `get_status` | |
+
+**`mcp-server/library.js`** — The admin surface: reads the recordings directory and answers questions about it. Kept separate from `index.js` so it stays testable, and it never writes anything except through `deleteRecording`.
+
+Joining the library is the non-obvious part. Three independently-named things have to be reconciled: WAVs and frame directories keyed by session id, and markdown that points back at a session. Notes carry `session:` in front matter; **transcripts are matched by filename convention** (`<notes-stem>-transcript.md`) rather than requiring their own front matter — an early version required it and silently dropped transcripts from search. Pre-1.1.0 notes sharing the WAV stem are also matched, and a transcript whose notes file is gone is surfaced as an orphan rather than disappearing.
+
+`deleteRecording` is dry-run by default and only acts on `confirm: true`, so the caller has to have seen the file list first.
 
 **`mcp-server/quality.js`** — Deterministic transcript assessment, kept out of `index.js` so it stays unit-testable. `wavDurationMs()` reads the exact length from the WAV header rather than subtracting wall-clock start/stop (which includes process spin-up and the SIGTERM drain). `assessQuality()` grades a transcript `good`/`fair`/`poor`/`unusable` from fragment rate, whisper looping, and speech pace measured against *spoken* time — so a quiet meeting isn't penalised for its silences. Each segment counts toward `degradedRatio` at most once; summing the categories independently lets the ratio exceed 1.0.
 
