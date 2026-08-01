@@ -3,7 +3,9 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](#requirements)
 
-Local-first meeting capture and transcription for Claude Code. Records audio from running meeting apps using macOS ScreenCaptureKit, transcribes locally with whisper.cpp, and produces structured notes via Claude — no data leaves your machine, no subscriptions, no cloud.
+Local-first meeting capture and transcription for Claude Code. Records audio from running meeting apps using macOS ScreenCaptureKit, transcribes locally with whisper.cpp, and produces structured notes via Claude. Optionally captures screen content too — slides, screen shares, code — with text recognized on-device.
+
+Recording and transcription happen entirely on your machine. No subscriptions, no third-party meeting bots, no cloud transcription service. See [What stays local](#what-stays-local) for exactly what is and isn't sent anywhere.
 
 ## Install
 
@@ -33,6 +35,13 @@ After installation, open System Settings → Privacy & Security → Screen Recor
 /meetey status   Check whether a recording is active
 ```
 
+`/meetey start` asks whether to also capture screen content. Answer up front to skip the question:
+
+```
+/meetey start --video       Audio + screen keyframes
+/meetey start --audio-only  Audio only
+```
+
 Or use the hotkeys:
 
 | Hotkey | Action |
@@ -43,8 +52,8 @@ Or use the hotkeys:
 ### Workflow
 
 1. Join your meeting in Chrome (Google Meet / Teams web), Zoom, or Microsoft Teams
-2. Run `/meetey start` — Claude detects the running app and begins recording
-3. When the meeting ends, run `/meetey stop` — Claude transcribes the audio and produces:
+2. Run `/meetey start` — Claude detects the running app, asks whether to capture screen content, and begins recording
+3. When the meeting ends, run `/meetey stop` — Claude transcribes the audio, reads any screen content, and produces:
 
 ```
 ## [Meeting title]
@@ -60,6 +69,9 @@ Or use the hotkeys:
 ### Action Items
 - [ ] task — owner
 
+### Screen Content          ← only when screen capture was used
+- **[04:12]** ...
+
 ### Full Transcript
 ...
 ```
@@ -68,13 +80,59 @@ Notes are saved as a `.md` file alongside the WAV in `~/.meetey/recordings/`.
 
 ### Supported apps
 
-| App | What gets captured |
-|-----|--------------------|
-| Chrome | All Chrome audio (mute other tabs) |
-| Zoom | Zoom meeting audio |
-| Microsoft Teams (desktop) | Teams meeting audio |
+| App | Audio captured | Screen captured (opt-in) |
+|-----|----------------|--------------------------|
+| Chrome | All Chrome audio | Everything Chrome displays — all tabs and windows |
+| Zoom | Zoom meeting audio | The Zoom window, including screen shares |
+| Microsoft Teams (desktop) | Teams meeting audio | The Teams window, including screen shares |
 
-> **Chrome note:** ScreenCaptureKit captures at the process level, not the tab level. Mute any other Chrome tabs playing audio before starting.
+> **Chrome note:** ScreenCaptureKit captures at the **process** level, not the tab level. Mute any other Chrome tabs playing audio before starting — and if you opt into screen capture, close or hide anything you don't want recorded, because every Chrome tab and window is in frame.
+
+## Screen capture
+
+Meetey can also capture what was on screen — slides, screen shares, code, diagrams — and fold it into the notes.
+
+**It is off by default and opt-in per meeting.** Claude asks every time you run `/meetey start`; there is no setting that turns it on permanently. Skip the question with `/meetey start --video` or `/meetey start --audio-only`.
+
+```
+/meetey start --video     Record audio + screen keyframes
+/meetey start --audio-only  Record audio only, don't ask
+```
+
+Instead of recording video, Meetey samples the screen once a second and keeps a JPEG **only when the picture materially changes**. An hour-long meeting typically yields a few dozen keyframes rather than 3,600, which is what makes this cheap enough to be worth doing:
+
+| | Storage/hr | Sent to Claude |
+|---|---|---|
+| Audio | ~115 MB | ~12K tokens (transcript) |
+| Screen keyframes | ~10 MB | ~5K tokens (recognized text) |
+
+Text is recognized on-device with the macOS Vision framework, so the default path sends only text. Claude reads an actual keyframe image only when the text isn't enough — a diagram, a chart, a UI screenshot.
+
+> ⚠️ **Screen capture records everything the target app displays** — other tabs, other windows of that app, and notification banners that appear over it. A screen share can contain credentials, customer data, or a colleague's private dashboard. Close or mute anything sensitive before you opt in.
+
+Keyframes are written to `~/.meetey/recordings/<session>-frames/` and are **not** deleted automatically — the notes reference them, so removing them would make the summary unverifiable. Delete that folder yourself when you're done with it.
+
+Tuning, if you need it (pass through to `meetey-capture`):
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--fps <n>` | `1` | Frames sampled per second |
+| `--scene-threshold <n>` | `12` | Grid cells (of 1024) that must change to count as a new scene. Raise it if a video tile is producing too many keyframes |
+| `--max-frames <n>` | `200` | Hard cap per session |
+| `--no-ocr` | off | Skip on-device text recognition |
+
+**Camera-heavy calls are a poor fit.** A moving video tile changes the picture constantly and will burn through the frame budget. Screen capture pays off for slides, demos, and screen shares; for a faces-only discussion, stay on audio.
+
+## What stays local
+
+| Stays on your machine, always | Sent to Claude to write the summary |
+|---|---|
+| Meeting audio (the WAV) | The transcript text |
+| Screen keyframes (the JPEGs) | Recognized on-screen text (OCR) |
+| Whisper transcription — runs locally | A few keyframe **images**, only when text isn't enough |
+| Vision OCR — runs on-device | |
+
+Nothing is uploaded to a third-party meeting service, and no bot joins your call. Audio and images never leave your machine unless Claude needs a specific keyframe to interpret a diagram. Summarization itself runs through Claude, so the *text* does go to the API — the same as anything else you'd paste into Claude Code.
 
 ## CLI
 
@@ -129,6 +187,10 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Blank or garbled transcript | Check Screen Recording permission: System Settings → Privacy & Security → Screen Recording |
 | Chrome captures wrong audio | Mute other tabs playing audio before starting |
 | MCP tools not available after install | Restart Claude Code — MCP servers connect at session startup |
+| No screen content in the notes | Screen capture is opt-in per meeting — start with `/meetey start --video` |
+| Too many near-identical keyframes | A video tile or animation was on screen. Raise `--scene-threshold`, or use audio-only for camera-heavy calls |
+| Slide changes missed | Lower `--scene-threshold` (fewer cells needed to count as a new scene) |
+| Keyframe text is garbled | Confirm the meeting window isn't scaled down; OCR runs on the captured resolution |
 
 ## How it works
 
@@ -137,11 +199,13 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
                                                              → whisper-cli
 ```
 
-**meetey-capture** is a Swift CLI using ScreenCaptureKit. It takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, and stops on SIGTERM.
+**meetey-capture** is a Swift CLI using ScreenCaptureKit. It takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, and stops on SIGTERM. With `--video` it also samples the screen, keeps a JPEG when the picture changes, and runs Vision OCR on each one.
 
 **MCP server** manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` so it's available in every Claude Code session.
 
-**`/meetey` skill** drives the user-facing flow: `list_apps → start_recording → stop_recording → transcribe`, then formats and saves the output.
+**`/meetey` skill** drives the user-facing flow: `list_apps → start_recording → stop_recording → transcribe → get_keyframes`, then formats and saves the output.
+
+Run `meetey-capture --selftest` to exercise the keyframe pipeline (scene detection, JPEG encoding, OCR, manifest) with synthetic frames — no Screen Recording permission or live meeting required.
 
 ## Files written
 
@@ -149,6 +213,7 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 |------|----------|
 | `~/.meetey/recordings/*.wav` | Raw audio from each session |
 | `~/.meetey/recordings/*.md` | Structured notes (summary, decisions, action items, transcript) |
+| `~/.meetey/recordings/*-frames/` | Screen keyframes + `index.json` (only when screen capture was used) |
 | `~/.meetey/models/ggml-base.en.bin` | Whisper model |
 | `~/.meetey/mcp-server/` | MCP server (stable install location) |
 | `~/.meetey/meetey-capture/` | Swift binary and sources |
