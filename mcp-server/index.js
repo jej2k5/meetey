@@ -265,7 +265,7 @@ function getStatus() {
 // --- MCP server ---
 
 const server = new Server(
-  { name: "meetey", version: "1.0.0" },
+  { name: "meetey", version: "1.1.0" },
   { capabilities: { tools: {} } }
 );
 
