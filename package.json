@@ -18,6 +18,7 @@
   "files": [
     "cli/",
     "mcp-server/index.js",
+    "mcp-server/quality.js",
     "mcp-server/package.json",
     "meetey-capture/Sources",
     "meetey-capture/Package.swift",
