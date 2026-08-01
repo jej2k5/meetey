@@ -20,7 +20,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { spawn, execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { join, resolve } from "path";
+import { basename, join, resolve } from "path";
+import { assessQuality, formatDuration, wavDurationMs } from "./quality.js";
 
 // --- Config ---
 
@@ -228,7 +229,19 @@ function transcribe({ wavPath: filePath }) {
 
     const transcript = segments.map((s) => s.text).join(" ").trim();
 
-    return { transcript, segments, jsonPath };
+    // Duration comes from the WAV header rather than the start/stop wall-clock
+    // pair, which includes process spin-up and the SIGTERM drain.
+    const durationMs = wavDurationMs(filePath);
+
+    return {
+      transcript,
+      segments,
+      jsonPath,
+      model: basename(MODEL_PATH),
+      durationMs,
+      durationLabel: formatDuration(durationMs),
+      quality: assessQuality(segments, durationMs),
+    };
   } catch (e) {
     return { error: e.message };
   }
@@ -319,7 +332,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "transcribe",
       description:
         "Transcribe a WAV file using whisper.cpp running locally. Returns the full " +
-        "transcript plus timestamped segments.",
+        "transcript, timestamped segments, exact recording duration, the model used, " +
+        "and a deterministic quality assessment of the transcript.",
       inputSchema: {
         type: "object",
         required: ["wavPath"],

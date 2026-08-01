@@ -56,27 +56,38 @@ Or use the hotkeys:
 3. When the meeting ends, run `/meetey stop` — Claude transcribes the audio, reads any screen content, and produces:
 
 ```
-## [Meeting title]
+## Q3 Roadmap and API Cutover
 
-**Recorded:** 10:02 AM → 10:47 AM
+**Recorded:** Fri 1 Aug 2026, 2:02–2:47 PM · 45 min
 
 ### Summary
 ...
 
 ### Key Decisions
-- ...
+- **[12:04]** Ship v1.1 without the motion heuristic; revisit next cycle
 
 ### Action Items
-- [ ] task — owner
+- [ ] **[31:17]** Draft the migration doc — Priya · due Friday
 
 ### Screen Content          ← only when screen capture was used
-- **[04:12]** ...
+- **[04:12]** Burndown chart, actual tracking ~11 days behind plan
 
-### Full Transcript
-...
+### Transcript
+Full transcript: `2026-08-01-1402-q3-roadmap-transcript.md` · 6,180 words
 ```
 
-Notes are saved as a `.md` file alongside the WAV in `~/.meetey/recordings/`.
+**Every claim carries the timestamp it came from.** If you doubt a decision, jump straight to that moment in the transcript instead of searching thousands of words.
+
+Notes are written to `~/.meetey/recordings/` as `YYYY-MM-DD-HHMM-<slug>.md` — chronologically sortable, so `ls` is a meeting history. The transcript lives in a sibling `-transcript.md` file rather than inline, so the notes stay scannable.
+
+When the transcription is unreliable, the notes say so at the top instead of summarizing noise with a confident voice:
+
+```
+> ⚠️ Transcription quality: poor — 80% of segments were silence markers,
+> fragments, or repeats. Summary may be incomplete; ggml-base.en.bin was used.
+```
+
+That assessment is computed from the transcript itself (fragment rate, whisper looping, speech pace against spoken time), not guessed.
 
 ### Supported apps
 
@@ -212,7 +223,8 @@ Run `meetey-capture --selftest` to exercise the keyframe pipeline (scene detecti
 | Path | Contents |
 |------|----------|
 | `~/.meetey/recordings/*.wav` | Raw audio from each session |
-| `~/.meetey/recordings/*.md` | Structured notes (summary, decisions, action items, transcript) |
+| `~/.meetey/recordings/YYYY-MM-DD-HHMM-<slug>.md` | Structured notes — summary, timestamped decisions and action items, screen content |
+| `~/.meetey/recordings/YYYY-MM-DD-HHMM-<slug>-transcript.md` | Full transcript, one timestamped line per utterance |
 | `~/.meetey/recordings/*-frames/` | Screen keyframes + `index.json` (only when screen capture was used) |
 | `~/.meetey/models/ggml-base.en.bin` | Whisper model |
 | `~/.meetey/mcp-server/` | MCP server (stable install location) |

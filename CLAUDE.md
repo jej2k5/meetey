@@ -38,7 +38,20 @@ User → /meetey (skill) → MCP server (Node.js) → meetey-capture (Swift CLI)
 
 **`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Exposes six tools: `list_apps`, `start_recording`, `stop_recording`, `transcribe`, `get_keyframes`, `get_status`. Registered globally in `~/.claude.json` by the installer.
 
-**`skill/SKILL.md`** — The `/meetey` slash command, with `start`, `stop`, and `status` subcommands. `start` drives `list_apps → start_recording`; `stop` drives `stop_recording → transcribe → get_keyframes`, formats the summary, and writes it to a `.md` file alongside the WAV; `status` calls `get_status`.
+**`mcp-server/quality.js`** — Deterministic transcript assessment, kept out of `index.js` so it stays unit-testable. `wavDurationMs()` reads the exact length from the WAV header rather than subtracting wall-clock start/stop (which includes process spin-up and the SIGTERM drain). `assessQuality()` grades a transcript `good`/`fair`/`poor`/`unusable` from fragment rate, whisper looping, and speech pace measured against *spoken* time — so a quiet meeting isn't penalised for its silences. Each segment counts toward `degradedRatio` at most once; summing the categories independently lets the ratio exceed 1.0.
+
+**`skill/SKILL.md`** — The `/meetey` slash command, with `start`, `stop`, and `status` subcommands. `start` drives `list_apps → start_recording`; `stop` drives `stop_recording → transcribe → get_keyframes` and writes two files; `status` calls `get_status`.
+
+## Notes Output
+
+The notes are the product, so the template is load-bearing. Four rules it exists to enforce:
+
+- **Every claim carries its timestamp.** Decisions, action items, and screen notes all render `[mm:ss]` (`[h:mm:ss]` past the hour) derived from segment `fromMs` or frame `offsetMs`. Without this a reader who doubts one line has to search thousands of words of raw ASR, which is the thing the summary exists to replace.
+- **The transcript is a sibling file, never inline and never printed to chat.** An hour of speech is ~9,000 unattributed words; at equal heading weight it buries the two action items someone actually came back for.
+- **Empty states diagnose.** "No decisions recorded" is true both when a meeting made none and when transcription was too poor to find them, and only the second is actionable. Branch the copy on `quality.level`.
+- **Filenames are browsable.** `YYYY-MM-DD-HHMM-<slug>.md`, with YAML front matter linking back to the session, WAV, and frames. Epoch-stamped names are ungreppable.
+
+Design rationale and the critique that produced these: `.impeccable/critique/`.
 
 **`docs/video-capture-plan.md`** — Design rationale for screen capture. Read before changing the keyframe pipeline.
 
