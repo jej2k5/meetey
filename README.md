@@ -134,6 +134,31 @@ Tuning, if you need it (pass through to `meetey-capture`):
 
 **Camera-heavy calls are a poor fit.** A moving video tile changes the picture constantly and will burn through the frame budget. Screen capture pays off for slides, demos, and screen shares; for a faces-only discussion, stay on audio.
 
+## Managing your meetings
+
+Everything about the library is reachable from Claude Code — there's no separate app, dashboard, or web UI to open. Just ask:
+
+```
+"what meetings do I have this week?"
+"what did we decide about the API cutover?"
+"show me the standup from Thursday"
+"how much disk are my recordings using?"
+"is meetey working? screen recording seems broken"
+"delete the test recording from yesterday but keep the notes"
+```
+
+Behind those, five tools:
+
+| Tool | What it does |
+|---|---|
+| `list_recordings` | The library — title, date, duration, quality, keyframe count, size. Filter by date range, quality, or whether screen capture was on |
+| `get_recording` | One meeting in full, including the notes and paths to its audio, transcript, and keyframes |
+| `search_recordings` | Search every meeting's notes and transcripts, returning the matching line **with its `[mm:ss]`** so you land on the moment |
+| `delete_recording` | Removes a session's files. Shows what it would delete and does nothing until you confirm; `keepNotes` drops the audio and keyframes but keeps the writing |
+| `system_status` | Install health, Screen Recording permission, active model, disk used — the first thing to check when something isn't working |
+
+Search is the one worth knowing about. Asking *"what did we decide about the API cutover?"* returns the decision, the meeting, and the timestamp — so you can jump straight to that second in the transcript instead of reading it.
+
 ## What stays local
 
 | Stays on your machine, always | Sent to Claude to write the summary |
