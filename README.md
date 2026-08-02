@@ -1,3 +1,5 @@
+<img src="assets/meetey-logo.png" alt="" width="112" align="right">
+
 # meetey
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
