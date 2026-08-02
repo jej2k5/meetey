@@ -22,5 +22,8 @@ models/
 # The shared .claude/settings.json (if any) is committed; the .local one is not.
 .claude/settings.local.json
 
+# Design critique notes — kept locally as working material, not published.
+.impeccable/
+
 # macOS
 .DS_Store

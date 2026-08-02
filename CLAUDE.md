@@ -66,7 +66,8 @@ The notes are the product, so the template is load-bearing. Four rules it exists
 - **Empty states diagnose.** "No decisions recorded" is true both when a meeting made none and when transcription was too poor to find them, and only the second is actionable. Branch the copy on `quality.level`.
 - **Filenames are browsable.** `YYYY-MM-DD-HHMM-<slug>.md`, with YAML front matter linking back to the session, WAV, and frames. Epoch-stamped names are ungreppable.
 
-Design rationale and the critique that produced these: `.impeccable/critique/`.
+The critique that produced these rules is in `.impeccable/critique/`, which is
+local-only and not committed — so treat the four rules above as the record.
 
 **`docs/video-capture-plan.md`** — Design rationale for screen capture. Read before changing the keyframe pipeline.
 
