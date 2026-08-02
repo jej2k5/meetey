@@ -35,6 +35,12 @@ After installation, open System Settings → Privacy & Security → Screen Recor
 /meetey start    Detect running meeting apps and start recording
 /meetey stop     Stop recording, transcribe, and save notes
 /meetey status   Check whether a recording is active
+
+/meetey list     Browse past meetings
+/meetey show     Open one meeting's notes
+/meetey search   Find a moment across every meeting
+/meetey delete   Remove a recording
+/meetey doctor   Check the install
 ```
 
 `/meetey start` asks whether to also capture screen content. Answer up front to skip the question:
@@ -138,26 +144,17 @@ Tuning, if you need it (pass through to `meetey-capture`):
 
 ## Managing your meetings
 
-Everything about the library is reachable from Claude Code — there's no separate app, dashboard, or web UI to open. Just ask:
+Everything about the library is reachable from Claude Code — there's no separate app, dashboard, or web UI to open. Every subcommand has a plain-language equivalent, so use whichever you'd reach for:
 
-```
-"what meetings do I have this week?"
-"what did we decide about the API cutover?"
-"show me the standup from Thursday"
-"how much disk are my recordings using?"
-"is meetey working? screen recording seems broken"
-"delete the test recording from yesterday but keep the notes"
-```
+| Subcommand | Or just ask | Tool |
+|---|---|---|
+| `/meetey list` | *"what meetings do I have this week?"* | `list_recordings` — title, date, duration, quality, keyframe count, size. Filter by date range, quality, or whether screen capture was on |
+| `/meetey show` | *"show me the standup from Thursday"* | `get_recording` — one meeting in full, including the notes and paths to its audio, transcript, and keyframes |
+| `/meetey search` | *"what did we decide about the API cutover?"* | `search_recordings` — searches every meeting's notes and transcripts, returning the matching line **with its `[mm:ss]`** so you land on the moment |
+| `/meetey delete` | *"delete yesterday's test recording but keep the notes"* | `delete_recording` — shows what it would delete and does nothing until you confirm; `--keep-notes` drops the audio and keyframes but keeps the writing |
+| `/meetey doctor` | *"is meetey working? screen recording seems broken"* | `system_status` — install health, Screen Recording permission, active model, disk used |
 
-Behind those, five tools:
-
-| Tool | What it does |
-|---|---|
-| `list_recordings` | The library — title, date, duration, quality, keyframe count, size. Filter by date range, quality, or whether screen capture was on |
-| `get_recording` | One meeting in full, including the notes and paths to its audio, transcript, and keyframes |
-| `search_recordings` | Search every meeting's notes and transcripts, returning the matching line **with its `[mm:ss]`** so you land on the moment |
-| `delete_recording` | Removes a session's files. Shows what it would delete and does nothing until you confirm; `keepNotes` drops the audio and keyframes but keeps the writing |
-| `system_status` | Install health, Screen Recording permission, active model, disk used — the first thing to check when something isn't working |
+`/meetey status` is about the recording running *right now*; `/meetey doctor` is about whether the install itself is healthy.
 
 Search is the one worth knowing about. Asking *"what did we decide about the API cutover?"* returns the decision, the meeting, and the timestamp — so you can jump straight to that second in the transcript instead of reading it.
 

@@ -1,5 +1,5 @@
 ---
-description: "Capture and transcribe meeting audio, optionally with screen content. Commands: start | stop | status"
+description: "Capture and transcribe meeting audio, optionally with screen content, and manage the meeting library. Commands: start | stop | status | list | show | search | delete | doctor"
 ---
 
 # Meetey Skill
@@ -12,7 +12,13 @@ It can optionally capture **screen keyframes** as well: slides, screen shares, c
 
 `/meetey [subcommand]`
 
-Subcommands: `start`, `stop`, `status`. Running `/meetey` with no subcommand shows the available commands.
+Two groups of subcommands: `start`, `stop`, `status` drive a recording; `list`, `show`,
+`search`, `delete`, `doctor` operate on the library of past ones. Running `/meetey` with
+no subcommand shows the available commands.
+
+Every library subcommand also has a plain-language equivalent — "what meetings do I have
+this week?" is `/meetey list`. Both routes reach the same tools, so honour whichever the
+user used and don't redirect them to the other.
 
 ---
 
@@ -26,6 +32,12 @@ Meetey — local meeting capture
   /meetey start    Start recording a meeting
   /meetey stop     Stop recording and transcribe
   /meetey status   Check if a recording is active
+
+  /meetey list     Browse past meetings
+  /meetey show     Open one meeting's notes
+  /meetey search   Find a moment across every meeting
+  /meetey delete   Remove a recording
+  /meetey doctor   Check the install
 ```
 
 ---
@@ -136,6 +148,109 @@ Full transcript: [`<notes-stem>-transcript.md`] · [N] words · [model]
 Call `get_status` and report:
 - If active: "Recording in progress since [startedAt] — session [sessionId]." Add "Capturing screen content." when `capturingVideo` is true.
 - If inactive: "No recording active."
+
+This is about the *live* recording only. For the health of the install, use `/meetey doctor`.
+
+---
+
+## `/meetey list [filters]`
+
+Browse the library. Call `list_recordings`, mapping whatever the user gave you onto its
+arguments — flags (`--since 2026-07-01`, `--until`, `--video`, `--audio-only`,
+`--quality poor`, `--limit 10`) or plain language ("last week", "the ones with slides",
+"anything that transcribed badly"). Resolve relative dates against today before calling.
+
+Render one row per meeting, newest first:
+
+```
+Date          Title                      Duration  Quality  Screen  Size
+2026-08-01    Q3 Roadmap and API Cutover  45 min    good     24 kf   118 MB
+2026-07-30    Standup                     11 min    fair     —       28 MB
+```
+
+- Print the `sessionId` only when the user will need it next — it's noise otherwise, and
+  `/meetey show` takes a date.
+- When `limit` truncated the results, say what the full match count was. Never let a
+  capped list read as the whole library.
+- Empty library → "No recordings yet. Run `/meetey start` during your next meeting."
+- Empty *because of the filters* → say which filter excluded everything and what the
+  unfiltered count is, so the user can tell "no poor recordings" from "no recordings".
+
+---
+
+## `/meetey show <session-id | date | title words>`
+
+Call `get_recording` with `sessionId` when the user gave one, otherwise `date`.
+
+- Ambiguous date (several meetings that day) → the tool can't pick; list that day's
+  meetings and ask which.
+- Title words rather than a date → call `list_recordings` first, match on title, then
+  fetch by `sessionId`.
+- No argument at all → show the three most recent via `list_recordings` and ask.
+
+Print the notes markdown as returned. It is already the finished document — do not
+re-summarize it, and do not print the transcript. Follow with the artifact paths:
+
+> Transcript: `<path>` · Audio: `<path>` · Keyframes: `<framesDir>`
+
+---
+
+## `/meetey search <query>`
+
+Call `search_recordings`. `--notes` or `--transcripts` set `scope`; default is `all`.
+
+Group matches by meeting and keep the `[mm:ss]` on every line — landing the user on the
+moment is the entire point of the tool:
+
+```
+Q3 Roadmap and API Cutover — 2026-08-01
+  [12:04]  Ship v1.1 without the motion heuristic; revisit next cycle
+  [31:17]  Draft the migration doc — Priya · due Friday
+```
+
+- A match with no offset (a notes heading, front matter) prints without the timestamp
+  rather than with a fabricated one.
+- No matches → say so and give the scope that was searched, since `--notes` searching
+  only decisions and action items is a common reason for a miss.
+
+---
+
+## `/meetey delete <session-id>`
+
+Destructive and irreversible. `delete_recording` is dry-run unless `confirm: true`, and
+that default exists to force this sequence — follow it exactly:
+
+1. Call `delete_recording` with the `sessionId` and **no** `confirm`.
+2. Show the user the exact file list it reports, with the total size.
+3. Ask for confirmation in plain terms: "Delete these N files (X MB)? This cannot be undone."
+4. Only after the user agrees, call again with `confirm: true`.
+
+Never pass `confirm: true` in the same turn the user asked to delete, even if they said
+"delete it and don't ask" — they haven't seen the file list yet, and the list is the
+thing being confirmed.
+
+`--keep-notes` sets `keepNotes: true`, removing the audio and keyframes but leaving the
+notes and transcript. Offer it when the recording is large and the notes are `good`
+quality: the WAV is nearly all of the disk, and the notes are the part worth keeping.
+
+Deleting keyframes makes any screen-content claim in the notes unverifiable. Say so when
+the session has frames and the user is not using `--keep-notes`.
+
+---
+
+## `/meetey doctor`
+
+Call `system_status` and report the install's health.
+
+- Everything healthy → one line per check, then the library's disk usage. Keep it short.
+- Anything failing → lead with the failures and the fix for each, and put the passing
+  checks in a single summary line underneath. A user runs this because something is
+  broken; the working parts are not the answer.
+- Map failures to the Troubleshooting table below rather than inventing new advice.
+
+Missing Screen Recording permission is the one worth calling out specifically: it produces
+a silent or empty recording rather than an error, so it is the likeliest cause of a
+"meetey recorded nothing" complaint.
 
 ---
 
