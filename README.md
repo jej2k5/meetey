@@ -1,4 +1,4 @@
-<img src="assets/meetey-logo.png" alt="" width="112" align="right">
+![Meetey — local-first meeting capture and transcription for Claude Code. Built on ScreenCaptureKit, whisper.cpp, and on-device OCR.](assets/meetey-social-preview.png)
 
 # meetey
 
