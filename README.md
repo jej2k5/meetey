@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](#requirements)
 
-Local-first meeting capture and transcription for Claude Code. Records audio from running meeting apps using macOS ScreenCaptureKit, transcribes locally with whisper.cpp, and produces structured notes via Claude. Optionally captures screen content too — slides, screen shares, code — with text recognized on-device.
+Join a meeting, run `/meetey start`, and get back dated notes where every decision and action item carries the `[mm:ss]` it came from. Audio comes off the meeting app through macOS ScreenCaptureKit, whisper.cpp does the transcription, and Claude writes the summary. Screen content — slides, screen shares, code — is opt-in per meeting, with text recognized on-device.
 
 Recording and transcription happen entirely on your machine. No subscriptions, no third-party meeting bots, no cloud transcription service. See [What stays local](#what-stays-local) for exactly what is and isn't sent anywhere.
 
