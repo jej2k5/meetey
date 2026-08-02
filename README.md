@@ -1,6 +1,6 @@
 ![Meetey — local-first meeting capture and transcription for Claude Code. Built on ScreenCaptureKit, whisper.cpp, and on-device OCR.](assets/meetey-social-preview.png)
 
-# meetey
+# Meetey
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](#requirements)
