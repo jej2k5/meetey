@@ -51,9 +51,17 @@ export async function update() {
 
   // The watch agent ships alongside but stays dormant: nothing runs it until
   // `meetey watch enable`, and that opt-in is the whole consent story.
+  //
+  // Guarded because a half-applied update is worse than a missing optional
+  // component: this runs after the MCP server has already been replaced, so
+  // throwing here would leave the install broken rather than merely incomplete.
   step("Installing the watch agent");
-  cpSync(join(PKG_DIR, "daemon"), DAEMON_DIR, { recursive: true, force: true });
-  green(`Watch agent installed to ${DAEMON_DIR} (off until: meetey watch enable)`);
+  if (existsSync(join(PKG_DIR, "daemon"))) {
+    cpSync(join(PKG_DIR, "daemon"), DAEMON_DIR, { recursive: true, force: true });
+    green(`Watch agent installed to ${DAEMON_DIR} (off until: meetey watch enable)`);
+  } else {
+    yellow("Watch agent not present in this package — skipping (meetey watch will be unavailable)");
+  }
 
   // --- Re-register (command/paths may have changed) ---
   step("Re-registering MCP server");
