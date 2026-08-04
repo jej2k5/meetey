@@ -36,18 +36,18 @@ User → /meetey (skill) → MCP server (Node.js) → meetey-capture (Swift CLI)
 
 **`meetey-capture/`** — Swift CLI using ScreenCaptureKit. Takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, stops on SIGTERM/SIGINT, after `--stop-after <seconds>` of wall-clock time, or via `--auto-stop`. Also supports `--list-apps` (prints running supported apps as JSON), `--selftest` (exercises the keyframe pipeline with synthetic frames, no permission needed), and the `--video` flags below. Requires macOS 13+.
 
-**`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` by the installer. Thirteen tools in two groups:
+**`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` by the installer. Seventeen tools in three groups:
 
-| Capture | Admin |
-|---|---|
-| `list_apps` | `list_recordings` |
-| `list_displays` | `get_recording` |
-| `list_windows` | `search_recordings` |
-| `start_recording` | `delete_recording` |
-| `stop_recording` | `system_status` |
-| `transcribe` | |
-| `get_keyframes` | |
-| `get_status` | |
+| Capture | Admin | Watcher |
+|---|---|---|
+| `list_apps` | `list_recordings` | `watcher_status` |
+| `list_displays` | `get_recording` | `enable_watcher` |
+| `list_windows` | `search_recordings` | `disable_watcher` |
+| `start_recording` | `delete_recording` | `watcher_log` |
+| `stop_recording` | `system_status` | |
+| `transcribe` | | |
+| `get_keyframes` | | |
+| `get_status` | | |
 
 **`mcp-server/library.js`** — The admin surface: reads the recordings directory and answers questions about it. Kept separate from `index.js` so it stays testable, and it never writes anything except through `deleteRecording`.
 
@@ -85,6 +85,15 @@ modal with buttons from a plain CLI, which is why the confirm-first design is
 cheap. `giving up after` returns `gave up:true` *with the default button still
 named*, so the timeout must be checked before the button — a prompt nobody
 answered is not consent.
+
+**`mcp-server/watch-agent.js`** — enabling and disabling the agent. It lives under
+`mcp-server/` rather than `cli/` because both `meetey watch` and the MCP server's
+`enable_watcher` need it, and only `mcp-server/` and `daemon/` are copied into
+`~/.meetey` — the CLI runs from the npx package and isn't on the machine
+afterwards. Every path is derived from arguments, never the environment, so the
+CLI's idea of where meetey lives can't drift from the server's. The skill must
+not enable the watcher unprompted: it installs a login agent that survives
+restarts, so it is a thing to offer, not to switch on helpfully.
 
 **`mcp-server/session-state.js`** — the single answer to "is a recording running",
 shared across processes. The MCP server's in-memory state was sufficient while it
@@ -140,6 +149,26 @@ local-only and not committed — so treat the four rules above as the record.
 **`docs/video-capture-plan.md`** — Design rationale for screen capture. Read before changing the keyframe pipeline.
 
 **`cli/`** — The `meetey` CLI (`bin` entry in `package.json`). `index.js` dispatches to `commands/install.js`, `commands/update.js`, and `commands/status.js`; `paths.js` holds every install path in one place. `install` checks the macOS version, installs whisper-cpp via Homebrew, downloads `ggml-base.en.bin`, builds and code-signs the Swift binary, installs the MCP server and skill, and adds hotkeys.
+
+## Packaging
+
+`files` in `package.json` enumerates `mcp-server/*.js` **individually**. Adding a
+file there and forgetting this list ships a package whose `index.js` imports
+something that isn't in it — and because `update` replaces the MCP server before
+anything else, the result is a broken install whose error points somewhere else
+entirely. This has happened; `session-state.js` was the casualty.
+
+Listing `mcp-server/` as a directory instead is *not* the fix: it sweeps in
+`mcp-server/node_modules` (24 MB, thousands of files).
+
+The reliable check is to run the packaged artifact, not to read the manifest:
+
+```bash
+npm pack --pack-destination /tmp/p && tar xzf /tmp/p/*.tgz -C /tmp/p
+cd /tmp/p/package/mcp-server && npm install && cd ..
+node mcp-server/index.js   # must answer tools/list
+node daemon/watch.js --selftest
+```
 
 ## Supported App Bundle IDs
 

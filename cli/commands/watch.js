@@ -14,58 +14,15 @@
  * limitations under the License.
  */
 
-import { execFileSync } from "child_process";
-import { existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "fs";
-import { dirname } from "path";
 import { green, yellow, red, step } from "../utils.js";
+import { MEETEY_DIR, HOME, BINARY_PATH } from "../paths.js";
+// The same code the MCP server runs, so `meetey watch enable` and `/meetey watch
+// on` cannot drift into behaving differently.
 import {
-  LOGS_DIR, WATCH_LABEL, WATCH_PLIST, WATCH_SCRIPT, BINARY_PATH,
-} from "../paths.js";
+  watchStatus, enableWatch, disableWatch, watchLog,
+} from "../../mcp-server/watch-agent.js";
 
-const escapeXml = (s) =>
-  s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" }[c]));
-
-function plist(nodePath) {
-  // A LaunchAgent, not a LaunchDaemon: it needs the user's GUI session to show a
-  // dialog, and it must never run for a user who is not logged in.
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>${escapeXml(WATCH_LABEL)}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${escapeXml(nodePath)}</string>
-    <string>${escapeXml(WATCH_SCRIPT)}</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>${escapeXml(`${LOGS_DIR}/watch.log`)}</string>
-  <key>StandardErrorPath</key><string>${escapeXml(`${LOGS_DIR}/watch.log`)}</string>
-</dict>
-</plist>
-`;
-}
-
-const uid = () => process.getuid();
-
-function isLoaded() {
-  try {
-    execFileSync("launchctl", ["print", `gui/${uid()}/${WATCH_LABEL}`], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function bootout() {
-  try {
-    execFileSync("launchctl", ["bootout", `gui/${uid()}/${WATCH_LABEL}`], { stdio: "ignore" });
-  } catch {
-    // Not loaded. That is the state we wanted.
-  }
-}
+const ctx = { meeteyDir: MEETEY_DIR, home: HOME };
 
 export function watch(sub) {
   switch (sub) {
@@ -84,34 +41,20 @@ Usage: meetey watch <enable|disable|status|logs>
 
 The watcher never records on its own. When it notices a meeting it asks, naming
 the window, and records only if you say yes.
+
+You can also drive this from Claude Code with /meetey watch.
 `);
-      return;
   }
 }
 
 function enable() {
-  if (!existsSync(BINARY_PATH)) {
-    red("meetey is not installed. Run: npx jej2k5/meetey install");
+  step("Starting the watch agent");
+  const result = enableWatch({ ...ctx, nodePath: process.execPath, captureBinary: BINARY_PATH });
+  if (result.error) {
+    red(result.error);
     process.exit(1);
   }
-  if (!existsSync(WATCH_SCRIPT)) {
-    red(`Watch agent not found at ${WATCH_SCRIPT}. Run: npx jej2k5/meetey update`);
-    process.exit(1);
-  }
-
-  const nodePath = process.execPath;
-
-  step("Installing the watch agent");
-  mkdirSync(LOGS_DIR, { recursive: true });
-  mkdirSync(dirname(WATCH_PLIST), { recursive: true });
-  writeFileSync(WATCH_PLIST, plist(nodePath));
-  green(`Wrote ${WATCH_PLIST}`);
-
-  step("Starting it");
-  bootout(); // Replace any previous version rather than stacking.
-  execFileSync("launchctl", ["bootstrap", `gui/${uid()}`, WATCH_PLIST], { stdio: "ignore" });
   green("Watcher running");
-
   console.log(`
 Meetey will now ask before recording when it notices a meeting in Chrome, Zoom,
 or Teams. It records audio only; screen capture still has to be requested per
@@ -127,39 +70,26 @@ It starts nothing without you clicking Record.
 
 function disable() {
   step("Stopping the watch agent");
-  bootout();
-  if (existsSync(WATCH_PLIST)) {
-    unlinkSync(WATCH_PLIST);
-    green(`Removed ${WATCH_PLIST}`);
+  const result = disableWatch(ctx);
+  if (result.error) {
+    red(result.error);
+    process.exit(1);
   }
-  green("Watcher disabled. Any recording already running is unaffected.");
+  green(result.message);
 }
 
 function status() {
-  const installed = existsSync(WATCH_PLIST);
-  const running = isLoaded();
-
-  if (!installed && !running) {
-    yellow("Watcher is off. Enable it with: meetey watch enable");
-    return;
-  }
-  if (installed && running) {
-    green("Watcher is running.");
-  } else if (installed) {
-    yellow("Watcher is installed but not running. Try: meetey watch enable");
-  } else {
-    yellow("Watcher is running but its plist is missing. Try: meetey watch disable, then enable.");
-  }
-  console.log(`  plist: ${WATCH_PLIST}`);
-  console.log(`  log:   ${LOGS_DIR}/watch.log`);
+  const state = watchStatus(ctx);
+  (state.enabled ? green : yellow)(state.message);
+  console.log(`  plist: ${state.plistPath}`);
+  console.log(`  log:   ${state.logPath}`);
 }
 
 function logs() {
-  const path = `${LOGS_DIR}/watch.log`;
-  if (!existsSync(path)) {
-    yellow("No watcher log yet.");
+  const result = watchLog({ ...ctx, lines: 40 });
+  if (result.message && result.lines.length === 0) {
+    yellow(result.message);
     return;
   }
-  const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-  console.log(lines.slice(-40).join("\n"));
+  console.log(result.lines.join("\n"));
 }

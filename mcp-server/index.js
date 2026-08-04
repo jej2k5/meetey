@@ -26,6 +26,7 @@ import {
   deleteRecording, getRecording, listRecordings, searchRecordings, systemStatus,
 } from "./library.js";
 import { readActive, writeActive, clearActive } from "./session-state.js";
+import { watchStatus, enableWatch, disableWatch, watchLog } from "./watch-agent.js";
 
 // --- Config ---
 
@@ -139,6 +140,30 @@ function listWindows({ bundleID } = {}) {
   } catch (e) {
     return { error: e.message };
   }
+}
+
+const watchContext = () => ({ meeteyDir: MEETEY_DIR, home: HOME });
+
+function watcherStatus() {
+  return watchStatus(watchContext());
+}
+
+function enableWatcher() {
+  // process.execPath is the node running this server, which the installer
+  // resolved absolutely when it registered us — safe to bake into the plist.
+  return enableWatch({
+    ...watchContext(),
+    nodePath: process.execPath,
+    captureBinary: CAPTURE_BINARY,
+  });
+}
+
+function disableWatcher() {
+  return disableWatch(watchContext());
+}
+
+function watcherLog({ lines = 40 } = {}) {
+  return watchLog({ ...watchContext(), lines });
 }
 
 // Give a stopping capture time to finalize the WAV header, and — when video is
@@ -557,6 +582,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "watcher_status",
+      description:
+        "Is the meeting watcher on? The watcher is an optional background agent that notices " +
+        "meetings in Chrome, Zoom, and Teams and asks before recording them. Off by default.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "enable_watcher",
+      description:
+        "Turn the meeting watcher on. It installs a login agent that persists across restarts " +
+        "until disabled, so only call this when the user has actually asked for it — never to " +
+        "be helpful after a missed recording. It records audio only, and always asks first.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "disable_watcher",
+      description:
+        "Turn the meeting watcher off. Does not stop a recording already in progress.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "watcher_log",
+      description:
+        "Recent watcher activity — what it noticed, what was recorded, what was declined. " +
+        "The place to look when the watcher is on but never seems to ask.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          lines: { type: "number", description: "How many recent lines (default 40)." },
+        },
+      },
+    },
+    {
       name: "start_recording",
       description: "Start capturing audio from a meeting app, and optionally screen keyframes.",
       inputSchema: {
@@ -747,6 +805,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   switch (name) {
     case "list_apps":      result = listApps(); break;
     case "list_displays":  result = listDisplays(); break;
+    case "watcher_status": result = watcherStatus(); break;
+    case "enable_watcher": result = enableWatcher(); break;
+    case "disable_watcher": result = disableWatcher(); break;
+    case "watcher_log":    result = watcherLog(args ?? {}); break;
     case "list_windows":   result = listWindows(args ?? {}); break;
     case "start_recording": result = startRecording(args); break;
     case "stop_recording":  result = stopRecording(); break;

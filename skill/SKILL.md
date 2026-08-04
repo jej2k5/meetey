@@ -33,6 +33,8 @@ Meetey — local meeting capture
   /meetey stop     Stop recording and transcribe
   /meetey status   Check if a recording is active
 
+  /meetey watch    Ask to record meetings automatically (off by default)
+
   /meetey list     Browse past meetings
   /meetey show     Open one meeting's notes
   /meetey search   Find a moment across every meeting
@@ -248,6 +250,34 @@ quality: the WAV is nearly all of the disk, and the notes are the part worth kee
 
 Deleting keyframes makes any screen-content claim in the notes unverifiable. Say so when
 the session has frames and the user is not using `--keep-notes`.
+
+---
+
+## `/meetey watch`
+
+Turns the meeting watcher on and off. The watcher is a background agent that notices
+meetings in Chrome, Zoom, and Teams and **asks** before recording — it never starts a
+recording on its own, and it records audio only.
+
+- `/meetey watch` with no argument → `watcher_status`. Report whether it is on, in one
+  line. If it is on, mention that it asks before recording; the user should not have to
+  wonder whether something is being captured silently.
+- `/meetey watch on` → `enable_watcher`. Say what it will now do, and that `/meetey watch off`
+  reverses it.
+- `/meetey watch off` → `disable_watcher`. Add that a recording already in progress keeps
+  running — turning the watcher off is not stopping a capture, and someone doing this
+  mid-meeting will assume otherwise.
+- `/meetey watch log` → `watcher_log`. Use this when the watcher is on but never seems to
+  ask: the log distinguishes "noticed nothing" from "could not list windows", and the
+  second means node is missing Screen Recording permission.
+
+**Only enable it when asked.** It installs a login agent that persists across restarts,
+so it is not something to switch on helpfully because a user just missed a recording —
+offer it, and let them answer. Turning it *off* on request needs no such hesitation.
+
+Say plainly what it does not do: it does not detect that a *call* ended. A recording stops
+when the app quits or the captured window closes, not when a meeting wraps up while the
+app stays open.
 
 ---
 
