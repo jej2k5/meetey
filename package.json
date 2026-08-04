@@ -1,6 +1,6 @@
 {
   "name": "meetey",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Local-first meeting capture and transcription for Claude Code",
   "type": "module",
   "author": "John Joseph",

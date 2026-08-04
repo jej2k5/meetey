@@ -635,7 +635,7 @@ function adminStatus() {
 // --- MCP server ---
 
 const server = new Server(
-  { name: "meetey", version: "1.4.0" },
+  { name: "meetey", version: "1.4.1" },
   { capabilities: { tools: {} } }
 );
 
