@@ -25,11 +25,14 @@ Commands:
             model, registers the MCP server and /meetey skill in Claude Code
   update    Rebuild the Swift binary and refresh the MCP server and skill
   status    Show what's installed and whether everything is wired up correctly
+  watch     Watch for meetings and offer to record them
+            (enable | disable | status | logs)
 
 Examples:
   npx jej2k5/meetey install
   npx jej2k5/meetey update
   npx jej2k5/meetey status
+  npx jej2k5/meetey watch enable
 `;
 
 switch (command) {
@@ -46,6 +49,11 @@ switch (command) {
   case "status": {
     const { status } = await import("./commands/status.js");
     status();
+    break;
+  }
+  case "watch": {
+    const { watch } = await import("./commands/watch.js");
+    watch(args[0]);
     break;
   }
   case "--version":

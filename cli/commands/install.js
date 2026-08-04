@@ -20,7 +20,7 @@ import { join, dirname } from "path";
 import { green, yellow, red, step, run, which, downloadFile } from "../utils.js";
 import {
   PKG_DIR, MEETEY_DIR, MODELS_DIR, RECORDINGS_DIR,
-  SERVER_DIR, CAPTURE_DIR, BINARY_PATH, MODEL_PATH, MODEL_URL,
+  SERVER_DIR, DAEMON_DIR, CAPTURE_DIR, BINARY_PATH, MODEL_PATH, MODEL_URL,
   SKILL_PATH, CLAUDE_JSON, KEYBINDINGS,
 } from "../paths.js";
 
@@ -84,6 +84,20 @@ export async function install() {
   run("npm install --silent", { cwd: SERVER_DIR });
   green(`MCP server installed to ${SERVER_DIR}`);
 
+  // The watch agent ships alongside but stays dormant: nothing runs it until
+  // `meetey watch enable`, and that opt-in is the whole consent story.
+  //
+  // Guarded because a half-applied update is worse than a missing optional
+  // component: this runs after the MCP server has already been replaced, so
+  // throwing here would leave the install broken rather than merely incomplete.
+  step("Installing the watch agent");
+  if (existsSync(join(PKG_DIR, "daemon"))) {
+    cpSync(join(PKG_DIR, "daemon"), DAEMON_DIR, { recursive: true, force: true });
+    green(`Watch agent installed to ${DAEMON_DIR} (off until: meetey watch enable)`);
+  } else {
+    yellow("Watch agent not present in this package — skipping (meetey watch will be unavailable)");
+  }
+
   // --- Register MCP server in ~/.claude.json ---
   step("Registering MCP server in Claude Code");
   registerMcpServer();
@@ -95,9 +109,9 @@ export async function install() {
   green(`Skill installed to ${SKILL_PATH}`);
 
   // --- Register keybindings ---
-  step("Registering hotkeys");
+  step("Registering Claude Code shortcuts");
   registerKeybindings();
-  green("Keybindings registered");
+  green("Shortcuts registered (they work while Claude Code is focused)");
 
   // --- Done ---
   printPermissionReminder();
@@ -118,6 +132,12 @@ export function installSkill() {
   cpSync(join(PKG_DIR, "skill", "SKILL.md"), SKILL_PATH);
 }
 
+/**
+ * Writes shortcuts into Claude Code's own keybindings file. They send a message
+ * into the session, so they only fire while Claude Code has focus — these are
+ * not system-wide hotkeys, and calling them "hotkeys" to users implies otherwise.
+ * Stopping a recording from anywhere is what the menu bar item is for.
+ */
 export function registerKeybindings() {
   let bindings = [];
   try { bindings = JSON.parse(readFileSync(KEYBINDINGS, "utf8")); } catch {}

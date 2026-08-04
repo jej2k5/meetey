@@ -276,3 +276,52 @@ wasn't available in the build environment, so the keyframe pipeline was
 otherwise unverifiable. It drives the real `KeyframeWriter` with synthetic
 frames and asserts on dedup behaviour, JPEG output, OCR recovery, and manifest
 shape. It is what caught the dHash failure.
+
+---
+
+## Revision: the accept rule
+
+The original rule — *differs from the last keyframe → write it* — turned out to
+be the wrong shape, in a way `--max-frames` masked rather than solved.
+
+**The frame budget was being exhausted, not spent.** In the standard
+slide-plus-speaker-tile layout the tile always exceeded the threshold, so the 2s
+debounce was the only throttle: 200 files landed in the first ~7 minutes and the
+remaining 50 were recorded as `truncated`. The "camera-heavy calls burn the frame
+budget" caveat in CLAUDE.md described this as inherent. It was not.
+
+Four changes, all in `KeyframeWriter`:
+
+1. **Capture on settle, not on change.** A detected change becomes a *pending*
+   candidate, persisted only once a later sample shows the screen has come to
+   rest. A transition collapses to one file, and it is the settled frame — which
+   also OCRs far better than anything caught mid-fade. `--max-unsettled`
+   (default 60s) forces a capture on a screen that never rests, and `finalize()`
+   flushes a candidate still pending when the meeting ends.
+2. **Mask cells that are always moving.** A rolling 15-sample window marks a cell
+   volatile at ≥60% and releases it below 30%; volatile cells don't count toward
+   the threshold. The hysteresis is not optional — with a single cutoff, cells
+   straddling a moving region's edge flicker in and out of the mask and leak ~15
+   cells per sample, which clears the threshold of 12 on its own. Neither is the
+   one-cell dilation: the grid averages ~40×22px per cell, so a tile's boundary
+   lands mid-cell and moves less than its interior.
+3. **Dedup against every keyframe, not just the previous one.** A deck navigated
+   4 → 5 → 4 wrote slide 4 twice. Matches now append to `revisitsMs` on the
+   existing record instead of writing a second copy — fewer files *and* a richer
+   timeline. `fingerprint` remains identity-only and is still not used for this.
+4. **`--display` / `--window`.** The default display is now the one showing the
+   target app rather than `displays.first`; on a multi-monitor setup those are
+   frequently different, which made screen capture record the wrong screen
+   entirely. `--window` scopes to one window, excluding the app's other windows
+   and its notification banners from both the frame and the detector.
+
+**Two interactions are load-bearing and both were found by the selftest, not by
+reasoning.** A full-screen video makes *every* cell volatile, so (a) the masked
+delta reads as zero and the `--max-unsettled` valve never fires unless it checks
+the *unmasked* delta, and (b) a masked identity comparison reports every frame as
+a revisit of the first — so revisit matching is skipped when less than a quarter
+of the grid is unmasked. Change either rule without the corresponding guard and a
+video demo records one frame for an entire hour, silently.
+
+`--no-volatility-mask` disables (2) as an escape hatch. `MEETEY_DEBUG_KEYFRAMES=1`
+prints the per-sample decision trace that made all of this tractable.

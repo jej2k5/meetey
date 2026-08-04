@@ -1,6 +1,6 @@
 {
   "name": "meetey",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Local-first meeting capture and transcription for Claude Code",
   "type": "module",
   "author": "John Joseph",
@@ -20,7 +20,10 @@
     "mcp-server/index.js",
     "mcp-server/quality.js",
     "mcp-server/library.js",
+    "mcp-server/session-state.js",
+    "mcp-server/watch-agent.js",
     "mcp-server/package.json",
+    "daemon/",
     "meetey-capture/Sources",
     "meetey-capture/Package.swift",
     "meetey-capture/entitlements.plist",
