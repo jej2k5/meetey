@@ -8,10 +8,15 @@ product
 
 macos
 
-Outside this skill's `web` / `ios` / `android` / `adaptive` set, recorded accurately
-rather than forced into a wrong fit. The UI surfaces are AppKit menu bar extras and
-AppleScript alerts; Apple's HIG for macOS menu bar extras and alerts is the
-applicable rulebook, not iOS conventions.
+Outside the `web` / `ios` / `android` / `adaptive` set that design tooling expects,
+recorded accurately rather than forced into a wrong fit. The UI surfaces are AppKit
+menu bar extras and AppleScript alerts; Apple's HIG for macOS menu bar extras and
+alerts is the applicable rulebook, not iOS conventions.
+
+Tooling that only knows those four values will warn about `macos` and fall back to
+`web`, which loads no platform rulebook at all. That is the intended outcome and
+not a defect to fix: no rulebook beats the wrong one, since iOS guidance would
+actively mislead on menu bar extras. Leave this value alone.
 
 ## Users
 
