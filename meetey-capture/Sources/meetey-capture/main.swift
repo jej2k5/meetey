@@ -46,6 +46,8 @@ struct Args {
     let autoStopGrace: TimeInterval
     let stopWhenCallEnds: Bool
     let callEndGrace: TimeInterval
+    let menuBar: Bool
+    let label: String
 
     static func parse() -> Args {
         var bundleID = ""
@@ -69,6 +71,8 @@ struct Args {
         var autoStopGrace: TimeInterval = 30
         var stopWhenCallEnds = false
         var callEndGrace: TimeInterval = 600
+        var menuBar = false
+        var label = ""
         let args = CommandLine.arguments.dropFirst()
         var it = args.makeIterator()
         while let arg = it.next() {
@@ -94,6 +98,8 @@ struct Args {
             case "--auto-stop-grace": autoStopGrace = TimeInterval(it.next() ?? "") ?? 30
             case "--stop-when-call-ends": stopWhenCallEnds = true
             case "--call-end-grace":  callEndGrace = TimeInterval(it.next() ?? "") ?? 600
+            case "--menu-bar":        menuBar = true
+            case "--label":           label = it.next() ?? ""
             default: break
             }
         }
@@ -105,7 +111,7 @@ struct Args {
                     maxFrames: maxFrames, maxUnsettled: maxUnsettled,
                     volatilityMask: volatilityMask, autoStop: autoStop,
                     autoStopGrace: autoStopGrace, stopWhenCallEnds: stopWhenCallEnds,
-                    callEndGrace: callEndGrace)
+                    callEndGrace: callEndGrace, menuBar: menuBar, label: label)
     }
 }
 
@@ -724,6 +730,88 @@ final class KeyframeWriter {
             result = (count: sorted.count, truncated: truncated)
         }
         return result
+    }
+}
+
+// MARK: - Menu bar indicator
+
+/// A menu bar item showing that a recording is running, with a way to stop it.
+///
+/// Two jobs, and the second is the more important one. It gives the user a way to
+/// stop a recording without switching to Claude Code — but it is also the only
+/// continuously visible sign that recording is happening at all. Everything else
+/// about Meetey's consent story is a moment in time (a prompt, a command); this is
+/// the part that stays true for the whole meeting.
+///
+/// Works from an unbundled binary: a status item needs `.accessory` activation
+/// policy and a running main run loop, not an app bundle. (Notification *action
+/// buttons* are the thing that would need bundling.)
+@MainActor
+final class RecordingIndicator: NSObject {
+    private let item: NSStatusItem
+    private let startedAt: Date
+    private let label: String
+    private let onStop: () -> Void
+    private var timer: Timer?
+    private let elapsedItem: NSMenuItem
+
+    /// Returns nil when there is no GUI session to draw into — an ssh shell, say.
+    /// A missing indicator must never take the recording down with it.
+    init?(label: String, startedAt: Date, onStop: @escaping () -> Void) {
+        guard !NSScreen.screens.isEmpty else { return nil }
+
+        self.startedAt = startedAt
+        self.label = label.isEmpty ? "Meeting" : label
+        self.onStop = onStop
+        self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.elapsedItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        super.init()
+
+        item.button?.image = NSImage(systemSymbolName: "record.circle.fill",
+                                     accessibilityDescription: "Meetey is recording")
+        item.button?.imagePosition = .imageLeading
+
+        let menu = NSMenu()
+        let title = NSMenuItem(title: "Recording \(self.label)", action: nil, keyEquivalent: "")
+        title.isEnabled = false
+        menu.addItem(title)
+        elapsedItem.isEnabled = false
+        menu.addItem(elapsedItem)
+        menu.addItem(.separator())
+        let stop = NSMenuItem(title: "Stop Recording", action: #selector(stopClicked), keyEquivalent: "")
+        stop.target = self
+        menu.addItem(stop)
+        item.menu = menu
+
+        tick()
+        // .common so the countdown keeps moving while the menu is open, which is
+        // exactly when someone is looking at it.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func tick() {
+        let elapsed = Int(Date().timeIntervalSince(startedAt))
+        item.button?.title = " \(Self.clock(elapsed))"
+        elapsedItem.title = "\(Self.clock(elapsed)) elapsed"
+    }
+
+    private static func clock(_ seconds: Int) -> String {
+        let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+
+    @objc private func stopClicked() {
+        onStop()
+    }
+
+    func remove() {
+        timer?.invalidate()
+        timer = nil
+        NSStatusBar.system.removeStatusItem(item)
     }
 }
 
@@ -1529,6 +1617,17 @@ func record(args: Args) async throws {
         }
     }
 
+    var indicator: RecordingIndicator? = nil
+    if args.menuBar {
+        let menuLabel = args.label
+        indicator = await MainActor.run {
+            RecordingIndicator(label: menuLabel, startedAt: startedAt, onStop: fireOnce)
+        }
+        if indicator == nil {
+            fputs("meetey-capture: no GUI session — recording without a menu bar indicator\n", stderr)
+        }
+    }
+
     // Where to cut the recording back to, if the call turns out to have ended
     // before we stopped. Written by the poll below, read by finalize.
     let trimLock = NSLock()
@@ -1608,6 +1707,9 @@ func record(args: Args) async throws {
     for await _ in stopStream { break }
 
     try await stream.stopCapture()
+    if let indicator {
+        await MainActor.run { indicator.remove() }
+    }
     let cutTo = trimLock.withLock { trimToBytes }
     let finalBytes = writer.finalize(trimmingToDataBytes: cutTo)
     if cutTo != nil {
@@ -1653,6 +1755,9 @@ Task {
                                             back to when that happened
                   --call-end-grace <secs>   How long the mic must stay released
                                             before believing it (default 600)
+                  --menu-bar                Show a menu bar indicator with a Stop
+                                            Recording item while recording
+                  --label <text>            What to call this recording in the menu
                   --display <id>            Display to capture (default: the one
                                             showing the target app)
                   --window <id>             Capture only this window of the app,
@@ -1680,4 +1785,12 @@ Task {
     }
 }
 
-RunLoop.main.run()
+if args.menuBar {
+    // A status item needs AppKit's run loop and an activation policy that keeps
+    // the process out of the Dock and the app switcher. `.accessory` is what
+    // makes an unbundled binary able to own a menu bar item at all.
+    NSApplication.shared.setActivationPolicy(.accessory)
+    NSApplication.shared.run()
+} else {
+    RunLoop.main.run()
+}

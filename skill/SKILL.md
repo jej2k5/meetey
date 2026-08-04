@@ -62,8 +62,8 @@ Meetey — local meeting capture
    > 2. Everything Chrome shows (default)
 
    Then call `list_displays`. **Only ask about the display when it returns more than one** — otherwise pick silently. Skip this whole step for audio-only recordings; there is nothing visual to narrow.
-7. Call `start_recording` with the chosen `bundleID`, `captureVideo: true` only if the user explicitly opted in, and `windowID`/`displayID` when the user chose them.
-8. Confirm to the user: "Recording started[, capturing screen content from <window title>]. Run `/meetey stop` or press `Ctrl+Shift+S` when the meeting ends."
+7. Call `start_recording` with the chosen `bundleID`, `captureVideo: true` only if the user explicitly opted in, and `windowID`/`displayID` when the user chose them. Pass `label` too — the window title if one was listed, otherwise the app name — so the menu bar indicator names what it is recording rather than saying "Meeting".
+8. Confirm to the user: "Recording started[, capturing screen content from <window title>]. Stop it from the menu bar, with `/meetey stop`, or with `Ctrl+Shift+S`."
 
 The recording also ends itself if the app quits, or if the chosen window closes — so forgetting to stop costs a little disk, not a runaway recording. Don't advertise this as "it knows when your meeting ends": it does not detect a call ending while the app keeps running, and saying otherwise would leave someone expecting a stop that never comes.
 

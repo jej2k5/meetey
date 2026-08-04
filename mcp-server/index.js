@@ -57,6 +57,12 @@ let finishedRecording = null;
 
 // --- Helpers ---
 
+const APP_NAMES = {
+  "com.google.Chrome": "Chrome",
+  "us.zoom.xos": "Zoom",
+  "com.microsoft.teams": "Teams",
+};
+
 function sessionId() {
   return `meetey-${Date.now()}`;
 }
@@ -186,6 +192,8 @@ function startRecording({
   windowID,
   autoStop = true,
   stopWhenCallEnds = true,
+  menuBar = true,
+  label,
 }) {
   if (activeRecording) {
     return { error: "A recording is already active. Call stop_recording first." };
@@ -221,6 +229,13 @@ function startRecording({
   // end is only committed after a long quiet period, and only if the audio we
   // recorded confirms nobody was still talking.
   if (stopWhenCallEnds !== false) args.push("--stop-when-call-ends");
+
+  // A menu bar item with a Stop Recording command. As much a standing "this is
+  // recording" indicator as a control — every other signal Meetey gives is a
+  // moment in time, and this one lasts the whole meeting.
+  if (menuBar !== false) {
+    args.push("--menu-bar", "--label", label || APP_NAMES[bundleID] || "Meeting");
+  }
 
   // Video is opt-in per recording. There is deliberately no env var or config
   // file that can turn it on by default — it must be requested every time.
@@ -631,6 +646,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           bundleID: {
             type: "string",
             description: "App bundle ID. Use list_apps to get valid values.",
+          },
+          menuBar: {
+            type: "boolean",
+            description:
+              "Show a menu bar indicator while recording, with a Stop Recording item (default " +
+              "true). It is also the only continuously visible sign that recording is happening, " +
+              "so leave it on unless the user asks otherwise.",
+          },
+          label: {
+            type: "string",
+            description:
+              "What to call this recording in the menu bar — pass the window title from " +
+              "list_windows when the user picked one. Falls back to the app name.",
           },
           stopWhenCallEnds: {
             type: "boolean",

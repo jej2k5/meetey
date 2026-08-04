@@ -172,6 +172,10 @@ function startRecording(window) {
     // started, so without this it runs until the app quits — which for Chrome
     // could be days.
     "--stop-when-call-ends",
+    // And a recording nobody explicitly started is exactly the one that most
+    // needs a visible indicator and a way to stop it without hunting for a
+    // terminal.
+    "--menu-bar", "--label", (window.title ?? "Meeting").slice(0, 60),
   ];
 
   const child = spawn(CAPTURE_BINARY, args, { stdio: ["ignore", "ignore", "pipe"] });

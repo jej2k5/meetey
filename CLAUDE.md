@@ -110,6 +110,29 @@ recording until someone deletes it by hand.
 runs whisper as soon as a recording ends. Re-running it on an hour of audio to
 get a byte-identical result is minutes wasted.
 
+## Menu bar indicator
+
+`--menu-bar` (on by default from `start_recording`, and always for watcher-started
+recordings) puts an `NSStatusItem` in the menu bar for the life of the recording:
+a record icon, the elapsed time, and a **Stop Recording** item wired to the same
+`fireOnce()` path as SIGTERM.
+
+It is as much a consent surface as a control. Every other signal Meetey gives is a
+moment in time — a prompt, a command, a confirmation. This is the only one that
+stays true for the whole meeting, so don't make it opt-in and don't hide it behind
+a preference.
+
+A status item does **not** need an app bundle: `.accessory` activation policy plus
+AppKit's run loop is enough, which is why `main.swift` calls `NSApplication.run()`
+instead of `RunLoop.main.run()` when `--menu-bar` is set. (Notification *action
+buttons* are the thing that genuinely requires bundling — see the watch agent,
+which uses `display dialog` for that reason.)
+
+`RecordingIndicator.init` is failable and returns nil when `NSScreen.screens` is
+empty — no GUI session, e.g. over ssh. A missing indicator must never take the
+recording down with it. `--label` names what is being recorded; the skill passes
+the window title, the watcher passes the meeting window's title.
+
 ## Call-end detection
 
 `--stop-when-call-ends` (on by default from `start_recording`; `stopWhenCallEnds:

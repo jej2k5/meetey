@@ -59,6 +59,22 @@ Or use the hotkeys:
 | `Ctrl+Shift+R` | `/meetey start` |
 | `Ctrl+Shift+S` | `/meetey stop` |
 
+### While a recording is running
+
+A menu bar item appears for as long as Meetey is recording, showing what it's recording and for how long. **Stop Recording** ends it without switching back to Claude Code.
+
+```
+                                   ◉ 12:04  ⌄
+                          ┌──────────────────────────────┐
+                          │  Recording Weekly Sync       │
+                          │  12:04 elapsed               │
+                          │  ──────────────────────────  │
+                          │  Stop Recording              │
+                          └──────────────────────────────┘
+```
+
+It's there partly as a control and partly so you can always tell at a glance that recording is happening — every other signal Meetey gives you is a single moment, and this one lasts the whole meeting. Stopping from here is the same as `/meetey stop`; run `/meetey stop` afterwards to write up the notes.
+
 ### Workflow
 
 1. Join your meeting in Chrome (Google Meet / Teams web), Zoom, or Microsoft Teams
