@@ -19,10 +19,15 @@
  * if told to.
  *
  * It never starts a recording on its own. Every recording this agent produces
- * was authorised by someone clicking "Record" in a dialog naming the specific
- * window — which is what makes it safe for detection to be imperfect. A false
- * positive costs one dismissed dialog; the human is the adjudicator, not the
- * pattern list.
+ * was authorised by someone choosing a capture mode in a dialog naming the
+ * specific window — which is what makes it safe for detection to be imperfect. A
+ * false positive costs one dismissed dialog; the human is the adjudicator, not
+ * the pattern list.
+ *
+ * Screen capture is offered here rather than withheld. The agent proposes; the
+ * person decides, in the same breath as authorising the audio. Withholding the
+ * option did not make anything safer — it just meant a meeting worth capturing
+ * visually could not be, without abandoning the prompt and starting over.
  *
  * Run by launchd as a LaunchAgent (see `meetey watch enable`), which is a user
  * session agent rather than a system daemon — `display dialog` needs a GUI
@@ -104,44 +109,65 @@ function escapeAppleScript(text) {
   return text.replace(/[\\"]/g, (c) => `\\${c}`);
 }
 
-/**
- * A real modal with buttons, from a plain CLI. Notification *action buttons*
- * need a signed .app bundle; `display dialog` does not.
- */
 const APP_NAMES = {
   "com.google.Chrome": "Chrome",
   "us.zoom.xos": "Zoom",
   "com.microsoft.teams": "Teams",
 };
 
+export const DECLINE = "Skip";
+export const AUDIO_ONLY = "Audio only";
+export const AUDIO_AND_SCREEN = "Audio + screen";
+
+/**
+ * Reads the chosen mode out of osascript's reply.
+ *
+ * Exact string comparison rather than a regex: the "+" in "Audio + screen" is a
+ * regex metacharacter, and a pattern that silently fails to match would start an
+ * audio-only recording for someone who asked for their screen.
+ *
+ * Returns "audio", "screen", or null for declined / timed out / dismissed.
+ */
+export function parseDialogChoice(output) {
+  // Timing out is not consent.
+  if (/gave up:true/.test(output)) return null;
+  const match = output.match(/button returned:([^,\n]*)/);
+  const choice = match ? match[1].trim() : "";
+  if (choice === AUDIO_ONLY) return "audio";
+  if (choice === AUDIO_AND_SCREEN) return "screen";
+  return null;
+}
+
 function askToRecord(window) {
   const app = APP_NAMES[window.bundleID] ?? "a meeting app";
   const title = (window.title ?? "").slice(0, 90);
   const message =
     `Meetey noticed a meeting in ${app}:\n\n${title}\n\n` +
-    `Record the audio? Screen content is never captured without a separate ` +
-    `prompt, and the recording stops on its own when the call ends.`;
+    `Record it? "${AUDIO_AND_SCREEN}" captures only this window. It stops on ` +
+    `its own when the call ends; run /meetey stop in Claude Code to write up ` +
+    `the notes.`;
 
-  // No default button, deliberately. This alert appears unprompted and can take
-  // focus mid-call; with a default, an absent-minded Return starts recording a
-  // room full of people. Consent should cost one deliberate click. Escape still
-  // declines, so dismissing stays cheap.
+  // The default is the *safe* option, not the affirmative one. This alert
+  // appears unprompted and can take focus mid-call, so an absent-minded Return
+  // must not start recording a room full of people. Having a default at all
+  // matters for keyboard users: without one no button holds focus, which can
+  // leave the affirmative choices mouse-only when Full Keyboard Access is off.
+  // It sits leftmost against the usual "default is rightmost" convention —
+  // deliberate, because declining is the safe direction here.
   const script =
     `display dialog "${escapeAppleScript(message)}" ` +
-    `buttons {"Not now", "Record"} ` +
+    `buttons {"${DECLINE}", "${AUDIO_AND_SCREEN}", "${AUDIO_ONLY}"} ` +
+    `default button "${DECLINE}" ` +
     `with title "Meetey" with icon note giving up after ${PROMPT_TIMEOUT_S}`;
 
   try {
-    const out = execFileSync("osascript", ["-e", script], {
+    return parseDialogChoice(execFileSync("osascript", ["-e", script], {
       encoding: "utf8",
       timeout: (PROMPT_TIMEOUT_S + 15) * 1000,
-    });
-    // Timing out is not consent.
-    if (/gave up:true/.test(out)) return false;
-    return /button returned:Record/.test(out);
+    }));
   } catch {
     // Non-zero means the user hit Escape, or no GUI session is available.
-    return false;
+    return null;
   }
 }
 
@@ -167,14 +193,16 @@ function transcribeInBackground(wavPath) {
   }
 }
 
-function startRecording(window) {
+function startRecording(window, mode) {
   const sessionId = `meetey-${Date.now()}`;
   const outputPath = join(RECORDINGS_DIR, `${sessionId}.wav`);
+  const framesDir = mode === "screen" ? join(RECORDINGS_DIR, `${sessionId}-frames`) : null;
   mkdirSync(RECORDINGS_DIR, { recursive: true });
 
-  // Audio only, always. Screen capture stays opt-in per recording through the
-  // skill, which asks its own question — an agent must not be the thing that
-  // decides to start capturing someone's screen.
+  // Screen capture is still consented to per recording — the agent offers, the
+  // person chooses, in the same dialog that authorises the audio. And it scopes
+  // to the window the watcher actually detected, which is narrower than what
+  // /meetey start captures by default.
   const args = [
     "--app", window.bundleID,
     "--output", outputPath,
@@ -189,6 +217,10 @@ function startRecording(window) {
     "--menu-bar", "--label", (window.title ?? "Meeting").slice(0, 60),
   ];
 
+  if (framesDir) {
+    args.push("--video", "--frames-dir", framesDir, "--window", String(window.windowID));
+  }
+
   const child = spawn(CAPTURE_BINARY, args, { stdio: ["ignore", "ignore", "pipe"] });
   child.stderr.on("data", (d) => process.stderr.write(d));
 
@@ -196,13 +228,15 @@ function startRecording(window) {
     pid: child.pid,
     sessionId,
     outputPath,
-    framesDir: null,
+    // Must be the real path, not null: stop_recording reads this to find the
+    // keyframe manifest, so a wrong value here loses the screen content.
+    framesDir,
     startedAt: new Date().toISOString(),
     startedBy: "watch",
     windowTitle: window.title ?? "",
     bundleID: window.bundleID,
   });
-  log(`recording ${sessionId} — ${window.title}`);
+  log(`recording ${sessionId} (${mode === "screen" ? "audio + screen" : "audio"}) — ${window.title}`);
 
   child.on("exit", () => {
     clearActive(MEETEY_DIR);
@@ -230,11 +264,12 @@ async function tick() {
 
   prompting = true;
   try {
-    if (askToRecord(meeting)) {
-      startRecording(meeting);
+    const mode = askToRecord(meeting);
+    if (mode) {
+      startRecording(meeting, mode);
     } else {
       declined.add(keyFor(meeting));
-      log(`declined — ${meeting.title}`);
+      log(`skipped — ${meeting.title}`);
     }
   } finally {
     prompting = false;
@@ -278,8 +313,28 @@ function selfTest() {
     failures.push("did not find a meeting behind an unrelated window");
   }
 
+  // Choice parsing. Getting this wrong records the wrong thing silently — the
+  // "+" in "Audio + screen" is a regex metacharacter, so a pattern-based reader
+  // would quietly fall through to audio for someone who asked for their screen.
+  const choices = [
+    [`button returned:${AUDIO_ONLY}, gave up:false`, "audio"],
+    [`button returned:${AUDIO_AND_SCREEN}, gave up:false`, "screen"],
+    [`button returned:${DECLINE}, gave up:false`, null],
+    // A timeout names the default button; it is still not consent.
+    [`button returned:${DECLINE}, gave up:true`, null],
+    [`button returned:${AUDIO_AND_SCREEN}, gave up:true`, null],
+    ["", null],
+    ["something unexpected", null],
+  ];
+  for (const [output, expected] of choices) {
+    const got = parseDialogChoice(output);
+    if (got !== expected) {
+      failures.push(`choice "${output}" parsed as ${got}, expected ${expected}`);
+    }
+  }
+
   if (failures.length === 0) {
-    console.log(`selftest: PASS (${shouldMatch.length} matched, ${shouldNotMatch.length} correctly ignored)`);
+    console.log(`selftest: PASS (${shouldMatch.length} matched, ${shouldNotMatch.length} correctly ignored, ${choices.length} dialog choices parsed)`);
     process.exit(0);
   }
   for (const f of failures) console.error(`selftest: FAIL — ${f}`);

@@ -257,7 +257,7 @@ the session has frames and the user is not using `--keep-notes`.
 
 Turns the meeting watcher on and off. The watcher is a background agent that notices
 meetings in Chrome, Zoom, and Teams and **asks** before recording — it never starts a
-recording on its own, and it records audio only.
+recording on its own, and the prompt lets the user pick audio only or audio + screen.
 
 - `/meetey watch` with no argument → `watcher_status`. Report whether it is on, in one
   line. If it is on, mention that it asks before recording; the user should not have to
@@ -297,7 +297,7 @@ a silent or empty recording rather than an error, so it is the likeliest cause o
 
 If asked about recording meetings automatically, describe what actually exists: an
 optional watcher (`meetey watch enable` in a terminal) that notices meetings in Chrome,
-Zoom, and Teams and **asks** before recording, audio only. It is off until enabled and
+Zoom, and Teams and **asks** before recording, offering audio only or audio + screen. It is off until enabled and
 never records on its own. Do not describe it as detecting when a meeting *ends* — a
 recording stops when the app quits or the captured window closes, not when a call wraps
 up while the app stays open.

@@ -220,19 +220,20 @@ Or from a terminal: `npx jej2k5/meetey watch enable | disable | status | logs`.
 │                                              │
 │  Weekly Sync — Google Meet                   │
 │                                              │
-│  Record it? Audio only — screen content is   │
-│  never captured without a separate prompt.   │
+│  Record it? "Audio + screen" captures only   │
+│  this window. It stops on its own when the   │
+│  call ends.                                  │
 │                                              │
-│              [ Not now ]   [ Record ]        │
+│   [ Skip ]  [ Audio + screen ]  [ Audio only ]│
 └──────────────────────────────────────────────┘
 ```
 
-Say no and it won't ask again for that window. A prompt you never answer times out as a no.
+Skip and it won't ask again for that meeting. A prompt you never answer times out as a no, and Return is wired to Skip so an absent-minded keystroke can't start a recording.
 
 Three things worth being clear about:
 
 - **It is off until you turn it on**, and turning it on installs a login agent that persists across restarts until you turn it off.
-- **It records audio only.** Screen capture is still requested per recording through `/meetey start`; the watcher will never start capturing your screen.
+- **You choose what it captures.** The prompt offers audio only or audio + screen, and screen capture covers just the meeting window it found — narrower than what `/meetey start` captures by default.
 - **It does not detect that a call *ended*.** The recording stops when the app quits or the captured window closes — not when a meeting wraps up while the app stays open. Detection is deliberately loose in the other direction too: it would rather ask about something that isn't a meeting than miss one, since a wrong guess costs one dismissed dialog.
 
 Recordings it makes are transcribed as soon as they end, so they're ready by the time you get to them. `/meetey list` shows them alongside everything else; `/meetey stop` works on one that's still running.

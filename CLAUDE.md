@@ -71,15 +71,33 @@ whether to record them. Off until `meetey watch enable`; `disable`, `status`, an
 `logs` round out the CLI (`cli/commands/watch.js`).
 
 **It never starts a recording on its own.** Every recording it produces was
-authorised by someone clicking "Record" in a dialog naming the specific window.
+authorised by someone choosing a capture mode in a dialog naming the specific window.
 That is what makes it safe for detection to be loose: a false positive costs one
 dismissed dialog, so `MEETING_PATTERNS` is deliberately generous. Do not "tighten"
 those patterns into silence — a missed meeting is unrecoverable, a spurious
 prompt is not. Run `node daemon/watch.js --selftest` after touching them.
 
-It records **audio only**, always. Screen capture stays opt-in per recording
-through the skill, which asks its own question. An agent must not be the thing
-that decides to start capturing someone's screen.
+The prompt offers three choices — `Skip` / `Audio + screen` / `Audio only` — and
+screen capture is **scoped to the window the watcher detected**, which is narrower
+than `/meetey start`'s default. Consent stays per-recording: the agent proposes,
+the person decides, in the same dialog that authorises the audio.
+
+Withholding the screen option did not make anything safer. It meant a meeting
+worth capturing visually could not be, without abandoning the prompt and starting
+over from Claude Code — and the copy at the time promised "a separate prompt" that
+no code path ever produced.
+
+The **default button is the safe one** (`Skip`), against the usual
+"default is rightmost" convention. An unprompted alert that can take focus
+mid-call must not turn an absent-minded Return into a recording. Having a default
+at all matters for keyboard users: with none, no button holds focus, which can
+leave the affirmative choices mouse-only when Full Keyboard Access is off.
+
+`parseDialogChoice` compares button titles exactly rather than by regex — the `+`
+in `Audio + screen` is a metacharacter, and a pattern that silently failed to match
+would start an audio-only recording for someone who asked for their screen.
+`--selftest` covers every reply shape, including a timeout naming the default
+button (which is still not consent).
 
 A LaunchAgent, not a LaunchDaemon: `display dialog` needs the user's GUI session,
 and this must never run for a user who is not logged in. Notification *action
