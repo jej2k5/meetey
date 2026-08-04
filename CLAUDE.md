@@ -61,6 +61,43 @@ Joining the library is the non-obvious part. Three independently-named things ha
 
 The admin tools were reachable by natural language from the start; the subcommands exist because that made them undiscoverable — nothing in the skill menu revealed the library existed. Both routes are supported and neither is the canonical one, so don't redirect a user from one to the other. `system_status` is `doctor` rather than anything containing "status" because `/meetey status` already means "is a recording running".
 
+## The watch agent
+
+**`daemon/watch.js`** — a launchd LaunchAgent that notices meetings and *asks*
+whether to record them. Off until `meetey watch enable`; `disable`, `status`, and
+`logs` round out the CLI (`cli/commands/watch.js`).
+
+**It never starts a recording on its own.** Every recording it produces was
+authorised by someone clicking "Record" in a dialog naming the specific window.
+That is what makes it safe for detection to be loose: a false positive costs one
+dismissed dialog, so `MEETING_PATTERNS` is deliberately generous. Do not "tighten"
+those patterns into silence — a missed meeting is unrecoverable, a spurious
+prompt is not. Run `node daemon/watch.js --selftest` after touching them.
+
+It records **audio only**, always. Screen capture stays opt-in per recording
+through the skill, which asks its own question. An agent must not be the thing
+that decides to start capturing someone's screen.
+
+A LaunchAgent, not a LaunchDaemon: `display dialog` needs the user's GUI session,
+and this must never run for a user who is not logged in. Notification *action
+buttons* would need a signed `.app` bundle, but `display dialog` gives a real
+modal with buttons from a plain CLI, which is why the confirm-first design is
+cheap. `giving up after` returns `gave up:true` *with the default button still
+named*, so the timeout must be checked before the button — a prompt nobody
+answered is not consent.
+
+**`mcp-server/session-state.js`** — the single answer to "is a recording running",
+shared across processes. The MCP server's in-memory state was sufficient while it
+was the only thing that could start a recording; the agent is a separate process,
+so without a file on disk a recording it started is invisible to `/meetey stop`
+and both could record the same meeting. Liveness is the **pid**, never the file:
+a crashed capture otherwise leaves a state file that blocks every future
+recording until someone deletes it by hand.
+
+`transcribe` reuses `<wav>.json` when it is newer than the WAV, because the agent
+runs whisper as soon as a recording ends. Re-running it on an hour of audio to
+get a byte-identical result is minutes wasted.
+
 ## Auto-stop
 
 `--auto-stop` (passed by default from `start_recording`; set `autoStop: false` to

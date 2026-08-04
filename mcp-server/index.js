@@ -18,18 +18,19 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { spawn, execFileSync } from "child_process";
-import { existsSync, mkdirSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, join, resolve } from "path";
 import { assessQuality, formatDuration, wavDurationMs } from "./quality.js";
 import {
   deleteRecording, getRecording, listRecordings, searchRecordings, systemStatus,
 } from "./library.js";
+import { readActive, writeActive, clearActive } from "./session-state.js";
 
 // --- Config ---
 
 const HOME = homedir();
-const MEETEY_DIR = join(HOME, ".meetey");
+const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
 const RECORDINGS_DIR = process.env.MEETEY_OUTPUT_DIR ?? join(MEETEY_DIR, "recordings");
 const MODEL_PATH = process.env.MEETEY_MODEL ?? join(MEETEY_DIR, "models", "ggml-base.en.bin");
 
@@ -140,6 +141,15 @@ function listWindows({ bundleID } = {}) {
   }
 }
 
+// Give a stopping capture time to finalize the WAV header, and — when video is
+// on — to drain the encode queue and write the frame manifest.
+function waitFor(ms, done) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline && !done()) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+}
+
 function startRecording({
   bundleID,
   stopAfter,
@@ -153,6 +163,17 @@ function startRecording({
 }) {
   if (activeRecording) {
     return { error: "A recording is already active. Call stop_recording first." };
+  }
+  // Another process may hold one — the watch agent, or a different Claude Code
+  // session. Recording the same meeting twice is worse than not starting.
+  const elsewhere = readActive(MEETEY_DIR);
+  if (elsewhere) {
+    return {
+      error:
+        `A recording is already active (session ${elsewhere.sessionId}, started ` +
+        `${elsewhere.startedBy === "watch" ? "by the watch agent" : "elsewhere"} ` +
+        `at ${elsewhere.startedAt}). Call stop_recording first.`,
+    };
   }
   if (!existsSync(CAPTURE_BINARY)) {
     return { error: `meetey-capture binary not found at ${CAPTURE_BINARY}. Run: npx jej2k5/meetey install` };
@@ -212,10 +233,20 @@ function startRecording({
     if (activeRecording?.sessionId === id) {
       finishedRecording = { ...recording, process: null, stoppedAt: new Date().toISOString() };
       activeRecording = null;
+      clearActive(MEETEY_DIR);
     }
   });
 
   activeRecording = recording;
+  writeActive(MEETEY_DIR, {
+    pid: child.pid,
+    sessionId: id,
+    outputPath,
+    framesDir,
+    startedAt: recording.startedAt,
+    startedBy: "mcp",
+    bundleID,
+  });
 
   return {
     sessionId: id,
@@ -233,9 +264,34 @@ function startRecording({
 }
 
 function stopRecording() {
-  // Already over. The process ended on its own, so there is nothing to signal —
-  // just hand back what it left behind.
   if (!activeRecording) {
+    // Owned by another process — the watch agent, or a second Claude Code
+    // session. We have a pid rather than a child handle, but SIGTERM is SIGTERM.
+    const elsewhere = readActive(MEETEY_DIR);
+    if (elsewhere) {
+      try {
+        process.kill(elsewhere.pid, "SIGTERM");
+      } catch {
+        // Gone between the liveness check and here. The files are still on disk.
+      }
+      waitFor(3000, () => existsSync(elsewhere.outputPath));
+      if (elsewhere.framesDir) {
+        waitFor(10000, () => existsSync(join(elsewhere.framesDir, "index.json")));
+      }
+      clearActive(MEETEY_DIR);
+      const result = buildStopResult(elsewhere, {
+        autoStopped: false,
+        stoppedAt: new Date().toISOString(),
+      });
+      if (elsewhere.startedBy === "watch") {
+        result.startedBy = "watch";
+        result.windowTitle = elsewhere.windowTitle;
+      }
+      return result;
+    }
+
+    // Already over — the process ended on its own, so there is nothing to
+    // signal. Hand back what it left behind.
     if (!finishedRecording) return { error: "No active recording." };
     const done = finishedRecording;
     finishedRecording = null;
@@ -249,17 +305,10 @@ function stopRecording() {
   activeRecording = null;
   // This stop supersedes anything held from an earlier self-terminated run.
   finishedRecording = null;
+  clearActive(MEETEY_DIR);
 
-  // Give the process a moment to finalize the WAV header, and — when video is
-  // on — to drain the encode queue and write the frame manifest.
-  const wait = (ms, done) => {
-    const deadline = Date.now() + ms;
-    while (Date.now() < deadline && !done()) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-    }
-  };
-  wait(3000, () => existsSync(outputPath));
-  if (framesDir) wait(10000, () => existsSync(join(framesDir, "index.json")));
+  waitFor(3000, () => existsSync(outputPath));
+  if (framesDir) waitFor(10000, () => existsSync(join(framesDir, "index.json")));
 
   return buildStopResult(recording, { autoStopped: false, stoppedAt: new Date().toISOString() });
 }
@@ -311,15 +360,23 @@ function transcribe({ wavPath: filePath }) {
   }
 
   try {
-    execFileSync("whisper-cli", [
-      "-f", filePath,
-      "-m", MODEL_PATH,
-      "-l", "en",
-      "--output-json",
-      "--no-prints",
-    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-
     const jsonPath = filePath.replace(/\.wav$/, ".wav.json");
+
+    // The watch agent transcribes as soon as a recording ends, so by the time
+    // anyone asks the work is usually already done. Re-running whisper on an
+    // hour of audio to produce a byte-identical result is minutes wasted.
+    const cached = existsSync(jsonPath) &&
+      statSync(jsonPath).mtimeMs >= statSync(filePath).mtimeMs;
+
+    if (!cached) {
+      execFileSync("whisper-cli", [
+        "-f", filePath,
+        "-m", MODEL_PATH,
+        "-l", "en",
+        "--output-json",
+        "--no-prints",
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    }
     if (!existsSync(jsonPath)) {
       return { error: "whisper-cli ran but produced no JSON output." };
     }
@@ -371,6 +428,23 @@ function getKeyframes({ framesDir, sessionId: id }) {
 
 function getStatus() {
   if (!activeRecording) {
+    const elsewhere = readActive(MEETEY_DIR);
+    if (elsewhere) {
+      return {
+        active: true,
+        sessionId: elsewhere.sessionId,
+        outputPath: elsewhere.outputPath,
+        capturingVideo: elsewhere.framesDir !== null,
+        framesDir: elsewhere.framesDir,
+        startedAt: elsewhere.startedAt,
+        startedBy: elsewhere.startedBy,
+        windowTitle: elsewhere.windowTitle,
+        message:
+          elsewhere.startedBy === "watch"
+            ? "Started by the watch agent. stop_recording will stop it from here."
+            : "Started by another Claude Code session. stop_recording will stop it from here.",
+      };
+    }
     if (finishedRecording) {
       return {
         active: false,

@@ -17,7 +17,10 @@
 import { execSync, execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { green, yellow, red } from "../utils.js";
-import { BINARY_PATH, MODEL_PATH, SERVER_DIR, SKILL_PATH, CLAUDE_JSON, KEYBINDINGS } from "../paths.js";
+import {
+  BINARY_PATH, MODEL_PATH, SERVER_DIR, SKILL_PATH, CLAUDE_JSON, KEYBINDINGS,
+  WATCH_PLIST, WATCH_SCRIPT,
+} from "../paths.js";
 
 function check(label, ok, detail = "") {
   const icon = ok ? "\x1b[32m✔\x1b[0m" : "\x1b[31m✘\x1b[0m";
@@ -50,6 +53,17 @@ export function status() {
   // Model
   const modelOk = existsSync(MODEL_PATH);
   check("Whisper model (ggml-base.en.bin)", modelOk, modelOk ? MODEL_PATH : "run: npx jej2k5/meetey install");
+
+  // Watch agent — optional, and off unless deliberately enabled.
+  const watchInstalled = existsSync(WATCH_SCRIPT);
+  const watchEnabled = existsSync(WATCH_PLIST);
+  // Not a check() — off is a valid state, and the default one.
+  const watchNote = watchEnabled
+    ? "on — asks before recording"
+    : watchInstalled
+      ? "off — enable: meetey watch enable"
+      : "off — run update to install it";
+  console.log(`  \x1b[2m\u25cb\x1b[0m  meeting watcher (optional)  \x1b[2m(${watchNote})\x1b[0m`);
 
   // MCP server
   const serverOk = existsSync(`${SERVER_DIR}/index.js`);

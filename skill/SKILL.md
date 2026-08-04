@@ -159,6 +159,7 @@ Full transcript: [`<notes-stem>-transcript.md`] · [N] words · [model]
 Call `get_status` and report:
 - If active: "Recording in progress since [startedAt] — session [sessionId]." Add "Capturing screen content." when `capturingVideo` is true.
 - If `autoStopped` is true: "The recording stopped on its own — [autoStopReason] — and hasn't been transcribed yet. Run `/meetey stop` to write it up." Say this rather than "no recording active"; the audio is sitting there unprocessed and the user almost certainly wants it.
+- If `startedBy` is `watch`, the meeting watcher started it after the user confirmed — say "Recording [windowTitle], started by the meeting watcher." `/meetey stop` works on it normally.
 - If inactive: "No recording active."
 
 This is about the *live* recording only. For the health of the install, use `/meetey doctor`.
@@ -263,6 +264,13 @@ Call `system_status` and report the install's health.
 Missing Screen Recording permission is the one worth calling out specifically: it produces
 a silent or empty recording rather than an error, so it is the likeliest cause of a
 "meetey recorded nothing" complaint.
+
+If asked about recording meetings automatically, describe what actually exists: an
+optional watcher (`meetey watch enable` in a terminal) that notices meetings in Chrome,
+Zoom, and Teams and **asks** before recording, audio only. It is off until enabled and
+never records on its own. Do not describe it as detecting when a meeting *ends* — a
+recording stops when the app quits or the captured window closes, not when a call wraps
+up while the app stays open.
 
 ---
 

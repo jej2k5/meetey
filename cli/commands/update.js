@@ -18,7 +18,7 @@ import { execFileSync } from "child_process";
 import { existsSync, cpSync } from "fs";
 import { join } from "path";
 import { green, yellow, red, step, run } from "../utils.js";
-import { PKG_DIR, CAPTURE_DIR, BINARY_PATH, SERVER_DIR, SKILL_PATH } from "../paths.js";
+import { PKG_DIR, CAPTURE_DIR, BINARY_PATH, SERVER_DIR, DAEMON_DIR, SKILL_PATH } from "../paths.js";
 import { registerMcpServer, installSkill, registerKeybindings } from "./install.js";
 
 export async function update() {
@@ -48,6 +48,12 @@ export async function update() {
   cpSync(join(PKG_DIR, "mcp-server"), SERVER_DIR, { recursive: true, force: true });
   run("npm install --silent", { cwd: SERVER_DIR });
   green("MCP server updated");
+
+  // The watch agent ships alongside but stays dormant: nothing runs it until
+  // `meetey watch enable`, and that opt-in is the whole consent story.
+  step("Installing the watch agent");
+  cpSync(join(PKG_DIR, "daemon"), DAEMON_DIR, { recursive: true, force: true });
+  green(`Watch agent installed to ${DAEMON_DIR} (off until: meetey watch enable)`);
 
   // --- Re-register (command/paths may have changed) ---
   step("Re-registering MCP server");

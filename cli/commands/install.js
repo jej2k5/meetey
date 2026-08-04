@@ -20,7 +20,7 @@ import { join, dirname } from "path";
 import { green, yellow, red, step, run, which, downloadFile } from "../utils.js";
 import {
   PKG_DIR, MEETEY_DIR, MODELS_DIR, RECORDINGS_DIR,
-  SERVER_DIR, CAPTURE_DIR, BINARY_PATH, MODEL_PATH, MODEL_URL,
+  SERVER_DIR, DAEMON_DIR, CAPTURE_DIR, BINARY_PATH, MODEL_PATH, MODEL_URL,
   SKILL_PATH, CLAUDE_JSON, KEYBINDINGS,
 } from "../paths.js";
 
@@ -83,6 +83,12 @@ export async function install() {
   cpSync(join(PKG_DIR, "mcp-server"), SERVER_DIR, { recursive: true, force: true });
   run("npm install --silent", { cwd: SERVER_DIR });
   green(`MCP server installed to ${SERVER_DIR}`);
+
+  // The watch agent ships alongside but stays dormant: nothing runs it until
+  // `meetey watch enable`, and that opt-in is the whole consent story.
+  step("Installing the watch agent");
+  cpSync(join(PKG_DIR, "daemon"), DAEMON_DIR, { recursive: true, force: true });
+  green(`Watch agent installed to ${DAEMON_DIR} (off until: meetey watch enable)`);
 
   // --- Register MCP server in ~/.claude.json ---
   step("Registering MCP server in Claude Code");
