@@ -91,7 +91,7 @@ export function status() {
       hotkeysOk = bindings.some(b => b.action === "sendMessage" && b.value?.includes("meetey"));
     } catch {}
   }
-  check("Hotkeys registered", hotkeysOk, hotkeysOk ? "Ctrl+Shift+R / Ctrl+Shift+S" : "run: npx jej2k5/meetey install");
+  check("Claude Code shortcuts", hotkeysOk, hotkeysOk ? "Ctrl+Shift+R / Ctrl+Shift+S, while Claude Code is focused" : "run: npx jej2k5/meetey install");
 
   console.log();
 }

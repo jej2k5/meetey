@@ -74,9 +74,9 @@ export async function update() {
   green(`Skill updated at ${SKILL_PATH}`);
 
   // --- Update keybindings ---
-  step("Updating hotkeys");
+  step("Updating Claude Code shortcuts");
   registerKeybindings();
-  green("Keybindings updated");
+  green("Shortcuts updated (they work while Claude Code is focused)");
 
   green("\nMeetey updated. Restart Claude Code to pick up changes.");
 }

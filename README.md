@@ -23,7 +23,7 @@ This will:
 - Build and sign the Swift capture binary
 - Register the MCP server in Claude Code
 - Install the `/meetey` skill
-- Add hotkeys (`Ctrl+Shift+R` / `Ctrl+Shift+S`)
+- Add shortcuts inside Claude Code (`Ctrl+Shift+R` / `Ctrl+Shift+S`)
 
 After installation, open System Settings → Privacy & Security → Screen Recording and enable your terminal app. Then start a new Claude Code session.
 
@@ -52,12 +52,14 @@ After installation, open System Settings → Privacy & Security → Screen Recor
 /meetey start --audio-only  Audio only
 ```
 
-Or use the hotkeys:
+Or use the shortcuts:
 
-| Hotkey | Action |
+| Shortcut | Action |
 |--------|--------|
 | `Ctrl+Shift+R` | `/meetey start` |
 | `Ctrl+Shift+S` | `/meetey stop` |
+
+These are shortcuts *inside Claude Code*, not system-wide hotkeys — they only fire while Claude Code is the focused window. To stop a recording from anywhere, use the [menu bar item](#while-a-recording-is-running).
 
 ### While a recording is running
 
@@ -295,7 +297,7 @@ Meetey status
   ✔  MCP server files  (~/.meetey/mcp-server)
   ✔  MCP server registered in ~/.claude.json
   ✔  /meetey skill installed
-  ✔  Hotkeys registered  (Ctrl+Shift+R / Ctrl+Shift+S)
+  ✔  Claude Code shortcuts  (Ctrl+Shift+R / Ctrl+Shift+S, while Claude Code is focused)
 ```
 
 ## Requirements
@@ -328,6 +330,7 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Blank or garbled transcript | Check Screen Recording permission: System Settings → Privacy & Security → Screen Recording |
 | Chrome captures wrong audio | Mute other tabs playing audio before starting |
 | MCP tools not available after install | Restart Claude Code — MCP servers connect at session startup |
+| `Ctrl+Shift+S` does nothing mid-meeting | It's a Claude Code shortcut, not a system-wide hotkey — it only fires when Claude Code is focused. Stop from the menu bar instead |
 | No screen content in the notes | Screen capture is opt-in per meeting — start with `/meetey start --video` |
 | Too many near-identical keyframes | Narrow to one window when you start; failing that, raise `--scene-threshold` |
 | Slide changes missed | Lower `--scene-threshold` (fewer cells needed to count as a new scene) |

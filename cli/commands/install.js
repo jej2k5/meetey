@@ -109,9 +109,9 @@ export async function install() {
   green(`Skill installed to ${SKILL_PATH}`);
 
   // --- Register keybindings ---
-  step("Registering hotkeys");
+  step("Registering Claude Code shortcuts");
   registerKeybindings();
-  green("Keybindings registered");
+  green("Shortcuts registered (they work while Claude Code is focused)");
 
   // --- Done ---
   printPermissionReminder();
@@ -132,6 +132,12 @@ export function installSkill() {
   cpSync(join(PKG_DIR, "skill", "SKILL.md"), SKILL_PATH);
 }
 
+/**
+ * Writes shortcuts into Claude Code's own keybindings file. They send a message
+ * into the session, so they only fire while Claude Code has focus — these are
+ * not system-wide hotkeys, and calling them "hotkeys" to users implies otherwise.
+ * Stopping a recording from anywhere is what the menu bar item is for.
+ */
 export function registerKeybindings() {
   let bindings = [];
   try { bindings = JSON.parse(readFileSync(KEYBINDINGS, "utf8")); } catch {}

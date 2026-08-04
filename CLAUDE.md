@@ -14,7 +14,7 @@ Recording, transcription, and OCR are all local; no third-party meeting service 
 npx jej2k5/meetey install
 ```
 
-This builds the Swift binary, downloads the Whisper model, copies the MCP server and skill to `~/.meetey/`, registers the MCP server in `~/.claude.json`, and adds hotkeys.
+This builds the Swift binary, downloads the Whisper model, copies the MCP server and skill to `~/.meetey/`, registers the MCP server in `~/.claude.json`, and adds Claude Code shortcuts.
 
 ## Commands
 
@@ -266,7 +266,7 @@ local-only and not committed — so treat the four rules above as the record.
 
 **`docs/video-capture-plan.md`** — Design rationale for screen capture. Read before changing the keyframe pipeline.
 
-**`cli/`** — The `meetey` CLI (`bin` entry in `package.json`). `index.js` dispatches to `commands/install.js`, `commands/update.js`, and `commands/status.js`; `paths.js` holds every install path in one place. `install` checks the macOS version, installs whisper-cpp via Homebrew, downloads `ggml-base.en.bin`, builds and code-signs the Swift binary, installs the MCP server and skill, and adds hotkeys.
+**`cli/`** — The `meetey` CLI (`bin` entry in `package.json`). `index.js` dispatches to `commands/install.js`, `commands/update.js`, and `commands/status.js`; `paths.js` holds every install path in one place. `install` checks the macOS version, installs whisper-cpp via Homebrew, downloads `ggml-base.en.bin`, builds and code-signs the Swift binary, installs the MCP server and skill, and adds Claude Code shortcuts.
 
 ## Packaging
 
@@ -327,10 +327,21 @@ For **video**, `--window` narrows capture to a single window, which keeps the ap
 
 Default: `ggml-base.en.bin` (~142 MB) stored at `~/.meetey/models/`. Override with `MEETEY_MODEL` env var. Larger models (`small.en`, `large-v3-turbo-q5_0`) give better accuracy — download the model to `~/.meetey/models/` and update `MEETEY_MODEL` in the `mcpServers.meetey.env` section of `~/.claude.json` to switch.
 
-## Hotkeys
+## Claude Code shortcuts
 
 - `Ctrl+Shift+R` — `/meetey start`
 - `Ctrl+Shift+S` — `/meetey stop`
+
+Written into `~/.claude/keybindings.json` with `action: "sendMessage"`, so they send a
+message into the session and **only fire while Claude Code is focused**. Nothing here
+registers a system-wide hotkey, and user-facing copy must not call them "hotkeys" — on
+macOS that word implies global, and someone will try one mid-meeting and get nothing.
+
+This leaves an asymmetry worth knowing: the menu bar item stops a recording from
+anywhere, but nothing starts one without either Claude Code or the watcher offering.
+A global hotkey would need Accessibility permission and an always-running process; the
+watcher is already that process, but a hotkey that silently starts recording is the
+consent posture this project avoids.
 
 ## License
 

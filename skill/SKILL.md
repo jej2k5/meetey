@@ -304,10 +304,14 @@ up while the app stays open.
 
 ---
 
-## Hotkeys
+## Claude Code shortcuts
 
 - `Ctrl+Shift+R` — start recording (`/meetey start`)
 - `Ctrl+Shift+S` — stop recording and transcribe (`/meetey stop`)
+
+These fire only while Claude Code is focused; they are not system-wide hotkeys. If a
+user asks how to stop a recording mid-meeting without leaving their call, the answer is
+the menu bar item, not these.
 
 ---
 
