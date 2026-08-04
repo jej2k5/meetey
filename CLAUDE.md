@@ -23,7 +23,10 @@ This builds the Swift binary, downloads the Whisper model, copies the MCP server
 | `npx jej2k5/meetey install` | First-time setup (or `node cli/index.js install` from a local clone) |
 | `npx jej2k5/meetey update` | Rebuild binary, refresh MCP server and skill |
 | `npx jej2k5/meetey status` | Show what's installed and whether everything is wired up |
+| `npx jej2k5/meetey watch enable\|disable\|status\|logs` | Control the meeting watcher (also `/meetey watch` from Claude Code) |
 | `swift build -c release` | Rebuild the Swift capture binary (run inside `meetey-capture/`) |
+| `.build/release/meetey-capture --selftest` | Keyframe pipeline + auto-stop, no permission needed |
+| `node daemon/watch.js --selftest` | Meeting-detection patterns |
 | `node mcp-server/index.js` | Run the MCP server manually for debugging |
 | `codesign --force --sign - --options runtime --entitlements entitlements.plist .build/release/meetey-capture` | Re-sign after a Swift rebuild (run inside `meetey-capture/`) |
 

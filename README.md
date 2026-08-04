@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](#requirements)
 
-Join a meeting, run `/meetey start`, and get back dated notes where every decision and action item carries the `[mm:ss]` it came from. Audio comes off the meeting app through macOS ScreenCaptureKit, whisper.cpp does the transcription, and Claude writes the summary. Screen content — slides, screen shares, code — is opt-in per meeting, with text recognized on-device.
+Join a meeting, run `/meetey start`, and get back dated notes where every decision and action item carries the `[mm:ss]` it came from. Audio comes off the meeting app through macOS ScreenCaptureKit, whisper.cpp does the transcription, and Claude writes the summary. Screen content — slides, screen shares, code — is opt-in per meeting, with text recognized on-device. If you'd rather not remember to hit record, Meetey can [watch for meetings and ask](#recording-without-remembering-to).
 
 Recording and transcription happen entirely on your machine. No subscriptions, no third-party meeting bots, no cloud transcription service. See [What stays local](#what-stays-local) for exactly what is and isn't sent anywhere.
 
@@ -36,6 +36,8 @@ After installation, open System Settings → Privacy & Security → Screen Recor
 /meetey stop     Stop recording, transcribe, and save notes
 /meetey status   Check whether a recording is active
 
+/meetey watch    Ask to record meetings automatically (off by default)
+
 /meetey list     Browse past meetings
 /meetey show     Open one meeting's notes
 /meetey search   Find a moment across every meeting
@@ -62,6 +64,8 @@ Or use the hotkeys:
 1. Join your meeting in Chrome (Google Meet / Teams web), Zoom, or Microsoft Teams
 2. Run `/meetey start` — Claude detects the running app, asks whether to capture screen content, and begins recording
 3. When the meeting ends, run `/meetey stop` — Claude transcribes the audio, reads any screen content, and produces:
+
+Forget step 3 and the recording still ends itself when the app quits or the captured window closes, so a forgotten `/meetey stop` costs a little disk rather than a runaway recording. Run `/meetey stop` afterwards anyway to write the notes — it picks the finished recording up and tells you why it ended.
 
 ```
 ## Q3 Roadmap and API Cutover
@@ -101,11 +105,11 @@ That assessment is computed from the transcript itself (fragment rate, whisper l
 
 | App | Audio captured | Screen captured (opt-in) |
 |-----|----------------|--------------------------|
-| Chrome | All Chrome audio | Everything Chrome displays — all tabs and windows |
+| Chrome | All Chrome audio | One chosen window, or everything Chrome displays |
 | Zoom | Zoom meeting audio | The Zoom window, including screen shares |
 | Microsoft Teams (desktop) | Teams meeting audio | The Teams window, including screen shares |
 
-> **Chrome note:** ScreenCaptureKit captures at the **process** level, not the tab level. Mute any other Chrome tabs playing audio before starting — and if you opt into screen capture, close or hide anything you don't want recorded, because every Chrome tab and window is in frame.
+> **Chrome note:** **audio** is captured at the **process** level — all Chrome audio, not just the meeting tab — so mute any other tabs playing audio before starting. For **screen** capture you can narrow to a single window, which excludes the app's other windows and its notification banners. You cannot narrow to a tab: macOS offers no tab-level capture, so whatever tab that window is showing is what gets captured.
 
 ## Screen capture
 
@@ -117,6 +121,10 @@ Meetey can also capture what was on screen — slides, screen shares, code, diag
 /meetey start --video     Record audio + screen keyframes
 /meetey start --audio-only  Record audio only, don't ask
 ```
+
+**Choose a window, not just an app.** After you opt in, Claude lists the app's windows by title — `Weekly Sync — Google Meet` rather than "all of Chrome" — and capturing one window keeps the app's other windows and its notification banners out of frame entirely. If more than one display is attached you'll be asked which; otherwise Meetey picks the one showing the meeting.
+
+ScreenCaptureKit has no concept of a browser tab, so a window is as fine as macOS allows. To isolate a single tab, drag it into its own window and pick that. Switching tabs inside the captured window captures the new tab.
 
 Instead of recording video, Meetey samples the screen once a second and keeps a JPEG **only when the picture materially changes**. An hour-long meeting typically yields a few dozen keyframes rather than 3,600, which is what makes this cheap enough to be worth doing:
 
@@ -131,16 +139,67 @@ Text is recognized on-device with the macOS Vision framework, so the default pat
 
 Keyframes are written to `~/.meetey/recordings/<session>-frames/` and are **not** deleted automatically — the notes reference them, so removing them would make the summary unverifiable. Delete that folder yourself when you're done with it.
 
+Two rules do most of the work of keeping that number small:
+
+- **A keyframe is written when the screen stops moving, not when it starts.** A slide transition collapses to a single file — the settled one, which also reads far better than anything caught mid-fade.
+- **Regions that are always moving stop counting.** A speaker tile, a progress bar, a clock: if a part of the screen changes constantly, it is excluded from the comparison. That is what makes the usual slide-plus-speaker-tile layout produce about one keyframe per slide.
+
+Returning to a slide you already showed doesn't write it twice — the manifest records that it came back, and the notes can cite both moments from one image.
+
 Tuning, if you need it (pass through to `meetey-capture`):
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--fps <n>` | `1` | Frames sampled per second |
-| `--scene-threshold <n>` | `12` | Grid cells (of 1024) that must change to count as a new scene. Raise it if a video tile is producing too many keyframes |
+| `--scene-threshold <n>` | `12` | Grid cells (of 1024) that must change to count as a new scene. Raise it if you're still getting near-duplicates; lower it if a subtle slide edit was missed |
 | `--max-frames <n>` | `200` | Hard cap per session |
+| `--max-unsettled <secs>` | `60` | Force a keyframe if the screen never comes to rest, so a video demo still records something |
+| `--no-volatility-mask` | off | Stop ignoring constantly-moving regions |
 | `--no-ocr` | off | Skip on-device text recognition |
 
-**Camera-heavy calls are a poor fit.** A moving video tile changes the picture constantly and will burn through the frame budget. Screen capture pays off for slides, demos, and screen shares; for a faces-only discussion, stay on audio.
+`sceneThreshold`, `windowID`, and `displayID` are all reachable from `/meetey start` — just ask.
+
+**Camera-heavy calls used to be a poor fit.** A moving video tile once produced a keyframe every couple of seconds until the 200-frame cap was hit, usually within the first ten minutes, leaving the rest of the meeting uncaptured. Moving tiles are now ignored, so that no longer happens. A faces-only call still won't produce anything worth reading — stay on audio for those — but it will no longer exhaust the budget and go dark.
+
+## Recording without remembering to
+
+Meetey can watch for meetings and offer to record them, so you don't have to think about `/meetey start` at the moment a call begins.
+
+```
+/meetey watch on      Turn it on
+/meetey watch         Is it on?
+/meetey watch off     Turn it off
+/meetey watch log     What it has noticed
+```
+
+Or from a terminal: `npx jej2k5/meetey watch enable | disable | status | logs`.
+
+**It never records on its own.** When it notices a meeting it asks, naming the window:
+
+```
+┌──────────────────────────────────────────────┐
+│  Meetey noticed a meeting:                   │
+│                                              │
+│  Weekly Sync — Google Meet                   │
+│                                              │
+│  Record it? Audio only — screen content is   │
+│  never captured without a separate prompt.   │
+│                                              │
+│              [ Not now ]   [ Record ]        │
+└──────────────────────────────────────────────┘
+```
+
+Say no and it won't ask again for that window. A prompt you never answer times out as a no.
+
+Three things worth being clear about:
+
+- **It is off until you turn it on**, and turning it on installs a login agent that persists across restarts until you turn it off.
+- **It records audio only.** Screen capture is still requested per recording through `/meetey start`; the watcher will never start capturing your screen.
+- **It does not detect that a call *ended*.** The recording stops when the app quits or the captured window closes — not when a meeting wraps up while the app stays open. Detection is deliberately loose in the other direction too: it would rather ask about something that isn't a meeting than miss one, since a wrong guess costs one dismissed dialog.
+
+Recordings it makes are transcribed as soon as they end, so they're ready by the time you get to them. `/meetey list` shows them alongside everything else; `/meetey stop` works on one that's still running.
+
+If the watcher is on but never asks, check `/meetey watch log`. `could not list windows` means Node needs Screen Recording permission — separately from the capture binary — in System Settings → Privacy & Security.
 
 ## Managing your meetings
 
@@ -169,12 +228,19 @@ Search is the one worth knowing about. Asking *"what did we decide about the API
 
 Nothing is uploaded to a third-party meeting service, and no bot joins your call. Audio and images never leave your machine unless Claude needs a specific keyframe to interpret a diagram. Summarization itself runs through Claude, so the *text* does go to the API — the same as anything else you'd paste into Claude Code.
 
+Nothing records without a person saying so. `/meetey start` is explicit, and the optional watcher asks before every recording — there is no mode in which Meetey captures a meeting you weren't asked about. Screen capture is a separate opt-in on top of that, requested per recording, and the watcher never requests it.
+
 ## CLI
 
 ```bash
-npx jej2k5/meetey install   # First-time setup
-npx jej2k5/meetey update    # Rebuild binary and refresh MCP server + skill
-npx jej2k5/meetey status    # Show what's installed and whether everything is wired up
+npx jej2k5/meetey install         # First-time setup
+npx jej2k5/meetey update          # Rebuild binary and refresh MCP server + skill
+npx jej2k5/meetey status          # Show what's installed and whether everything is wired up
+
+npx jej2k5/meetey watch enable    # Watch for meetings and offer to record them
+npx jej2k5/meetey watch disable   # Stop watching
+npx jej2k5/meetey watch status    # Is the watcher running?
+npx jej2k5/meetey watch logs      # Recent watcher activity
 ```
 
 `status` output:
@@ -186,6 +252,7 @@ Meetey status
   ✔  binary code-signed
   ✔  whisper-cli  (/opt/homebrew/bin/whisper-cli)
   ✔  Whisper model (ggml-base.en.bin)  (~/.meetey/models/ggml-base.en.bin)
+  ○  meeting watcher (optional)  (off — enable: meetey watch enable)
   ✔  MCP server files  (~/.meetey/mcp-server)
   ✔  MCP server registered in ~/.claude.json
   ✔  /meetey skill installed
@@ -223,24 +290,36 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Chrome captures wrong audio | Mute other tabs playing audio before starting |
 | MCP tools not available after install | Restart Claude Code — MCP servers connect at session startup |
 | No screen content in the notes | Screen capture is opt-in per meeting — start with `/meetey start --video` |
-| Too many near-identical keyframes | A video tile or animation was on screen. Raise `--scene-threshold`, or use audio-only for camera-heavy calls |
+| Too many near-identical keyframes | Narrow to one window when you start; failing that, raise `--scene-threshold` |
 | Slide changes missed | Lower `--scene-threshold` (fewer cells needed to count as a new scene) |
 | Keyframe text is garbled | Confirm the meeting window isn't scaled down; OCR runs on the captured resolution |
+| Keyframes from the wrong screen | Pass a `displayID`, or pick a window — Meetey otherwise guesses from where the app is |
+| Recording stopped early | It ends when the app quits or the captured window closes. Rejoining in a new window won't resume it |
+| `/meetey stop` says no recording is active | If it already stopped itself, `/meetey stop` still collects it. If that fails, the WAV is in `~/.meetey/recordings/` |
+| Watcher never asks | `/meetey watch log`. `could not list windows` means Node needs Screen Recording permission, separately from the capture binary |
+| Watcher asks about things that aren't meetings | Expected — it errs toward asking. Say "Not now" and it drops that window |
 
 ## How it works
 
 ```
-/meetey skill → MCP server (Node.js, ~/.meetey/mcp-server/) → meetey-capture (Swift, ~/.meetey/)
-                                                             → whisper-cli
+/meetey skill  → MCP server (Node.js, ~/.meetey/mcp-server/) → meetey-capture (Swift, ~/.meetey/)
+watch agent   ↗  (~/.meetey/daemon/, optional)               → whisper-cli
 ```
 
-**meetey-capture** is a Swift CLI using ScreenCaptureKit. It takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, and stops on SIGTERM. With `--video` it also samples the screen, keeps a JPEG when the picture changes, and runs Vision OCR on each one.
+**meetey-capture** is a Swift CLI using ScreenCaptureKit. It takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, and stops on SIGTERM, on `--stop-after`, or via `--auto-stop` when the app quits or the captured window closes. With `--video` it also samples the screen, keeps a JPEG when the picture settles into something new, and runs Vision OCR on each one.
 
 **MCP server** manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` so it's available in every Claude Code session.
 
-**`/meetey` skill** drives the user-facing flow: `list_apps → start_recording → stop_recording → transcribe → get_keyframes`, then formats and saves the output.
+**`/meetey` skill** drives the user-facing flow: `list_apps → list_windows → start_recording → stop_recording → transcribe → get_keyframes`, then formats and saves the output.
 
-Run `meetey-capture --selftest` to exercise the keyframe pipeline (scene detection, JPEG encoding, OCR, manifest) with synthetic frames — no Screen Recording permission or live meeting required.
+**Watch agent** is an optional launchd LaunchAgent that notices meetings and asks whether to record them. It is off until enabled and starts nothing without a confirmation. Because it's a separate process from the MCP server, both coordinate through a state file keyed on process liveness — which is why `/meetey stop` can stop a recording the watcher started.
+
+Two self-tests run without Screen Recording permission or a live meeting:
+
+```bash
+meetey-capture --selftest        # scene detection, settling, dedup, OCR, manifest, auto-stop
+node ~/.meetey/daemon/watch.js --selftest   # meeting detection patterns
+```
 
 ## Files written
 
@@ -253,6 +332,10 @@ Run `meetey-capture --selftest` to exercise the keyframe pipeline (scene detecti
 | `~/.meetey/models/ggml-base.en.bin` | Whisper model |
 | `~/.meetey/mcp-server/` | MCP server (stable install location) |
 | `~/.meetey/meetey-capture/` | Swift binary and sources |
+| `~/.meetey/daemon/` | Watch agent (dormant unless enabled) |
+| `~/.meetey/state/active.json` | Which recording is running, if any — removed when it ends |
+| `~/.meetey/logs/watch.log` | Watcher activity (only when enabled) |
+| `~/Library/LaunchAgents/com.meetey.watch.plist` | Watcher login agent (only when enabled) |
 
 ## Contributing
 
