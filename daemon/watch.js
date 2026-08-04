@@ -38,7 +38,7 @@ import { spawn, execFileSync } from "child_process";
 import { existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
-import { readActive, writeActive, clearActive } from "../mcp-server/session-state.js";
+import { readActive, writeActive, clearActive, writePending } from "../mcp-server/session-state.js";
 
 const HOME = homedir();
 const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
@@ -222,8 +222,17 @@ function startRecording(window, mode) {
   }
 
   const child = spawn(CAPTURE_BINARY, args, { stdio: ["ignore", "ignore", "pipe"] });
-  child.stderr.on("data", (d) => process.stderr.write(d));
 
+  let autoStopReason = null;
+  child.stderr.on("data", (d) => {
+    const text = d.toString();
+    process.stderr.write(text);
+    const reason = text.match(/auto-stop — (.+)/);
+    if (reason) autoStopReason = reason[1].trim();
+    if (/call ended — trimming/.test(text)) autoStopReason = "the call ended";
+  });
+
+  const startedAt = new Date().toISOString();
   writeActive(MEETEY_DIR, {
     pid: child.pid,
     sessionId,
@@ -231,7 +240,7 @@ function startRecording(window, mode) {
     // Must be the real path, not null: stop_recording reads this to find the
     // keyframe manifest, so a wrong value here loses the screen content.
     framesDir,
-    startedAt: new Date().toISOString(),
+    startedAt,
     startedBy: "watch",
     windowTitle: window.title ?? "",
     bundleID: window.bundleID,
@@ -241,7 +250,25 @@ function startRecording(window, mode) {
   child.on("exit", () => {
     clearActive(MEETEY_DIR);
     log(`recording ${sessionId} ended`);
-    if (existsSync(outputPath)) transcribeInBackground(outputPath);
+    if (!existsSync(outputPath)) return;
+
+    // Leave a record for /meetey stop to collect. Clearing the active state is
+    // right — nothing is recording any more — but this recording ended in a
+    // different process from the MCP server, so without this there is nothing
+    // for the user to pick up, and the notification we just showed them told
+    // them to go pick it up.
+    writePending(MEETEY_DIR, {
+      sessionId,
+      outputPath,
+      framesDir,
+      startedAt,
+      stoppedAt: new Date().toISOString(),
+      startedBy: "watch",
+      windowTitle: window.title ?? "",
+      autoStopReason,
+    });
+
+    transcribeInBackground(outputPath);
   });
 }
 

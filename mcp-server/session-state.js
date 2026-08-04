@@ -80,3 +80,51 @@ export function clearActive(meeteyDir) {
     // Already gone is the desired state.
   }
 }
+
+/**
+ * A recording that has finished and nobody has written up yet.
+ *
+ * The active-state file answers "is something recording"; deleting it when the
+ * capture ends is correct. But a recording started by the watch agent then ends
+ * in a *different process* from the MCP server, so without this there is nothing
+ * left for `/meetey stop` to find — it reports no active recording and strands a
+ * finished WAV whose notification just told the user to go collect it.
+ *
+ * Holds the most recent uncollected recording. Earlier ones are not lost: they
+ * appear in `list_recordings` as recordings with audio and no notes.
+ */
+export function pendingStatePath(meeteyDir) {
+  return join(meeteyDir, "state", "pending.json");
+}
+
+export function writePending(meeteyDir, record) {
+  const path = pendingStatePath(meeteyDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(record, null, 2) + "\n");
+}
+
+/** Reads without consuming. Use `clearPending` once the recording is written up. */
+export function readPending(meeteyDir) {
+  const path = pendingStatePath(meeteyDir);
+  if (!existsSync(path)) return null;
+  try {
+    const record = JSON.parse(readFileSync(path, "utf8"));
+    // The audio is the point. If it is gone the record is noise.
+    if (!record?.outputPath || !existsSync(record.outputPath)) {
+      clearPending(meeteyDir);
+      return null;
+    }
+    return record;
+  } catch {
+    clearPending(meeteyDir);
+    return null;
+  }
+}
+
+export function clearPending(meeteyDir) {
+  try {
+    unlinkSync(pendingStatePath(meeteyDir));
+  } catch {
+    // Already gone is the desired state.
+  }
+}

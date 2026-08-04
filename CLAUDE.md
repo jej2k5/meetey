@@ -247,10 +247,22 @@ producing audio.
 `AutoStopMonitor` is a pure state machine so `--selftest` covers the grace
 period, blip recovery, and both stop conditions without a live meeting.
 
-Because the process can now exit on its own, the MCP server keeps the session in
-`finishedRecording` when the child exits unprompted, so `stop_recording` still
-returns the files instead of "No active recording" — which would strand a good
-WAV the user has no obvious way to reach. `get_status` surfaces the same thing.
+Because the process can now exit on its own, a finished-but-uncollected recording
+has to survive somewhere. Two layers, and the first is not enough on its own:
+
+- `finishedRecording` (in memory) covers a capture this server started and
+  watched exit.
+- **`state/pending.json`** covers everything else, and is the one that matters.
+  A watch-agent recording ends in a *different process*; that process clears the
+  active state, correctly, and without a pending record `stop_recording` reports
+  no active recording and strands the WAV — right after the post-stop
+  notification told the user to go collect it. This shipped broken in v1.4.0.
+  `stop_recording` checks pending **before** its own in-memory state, since the
+  cross-process case is the one that has no other answer.
+- When neither exists, `stop_recording` still fails, but returns
+  `unwrittenRecordings()` — recordings with audio and no notes, from the library.
+  The pending record only holds the most recent; the library is the durable
+  answer, and it turns a dead end into a next step.
 
 ## Notes Output
 

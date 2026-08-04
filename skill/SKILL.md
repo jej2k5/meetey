@@ -77,7 +77,7 @@ The recording also ends itself if the app quits, or if the chosen window closes 
 
 ### Gather
 
-1. Call `stop_recording`. If no recording is active, say so. If the result has `autoStopped: true`, the recording had already ended by itself — carry on with the transcription exactly as normal, and mention the reason once ("the recording had already stopped — [autoStopReason]") rather than treating it as an error.
+1. Call `stop_recording`. If it errors with no active recording but returns `hint`/`unwritten`, **do not stop there** — those are recordings that were captured and never written up. Say how many, name the most recent, and offer to write it up now by calling `transcribe` with its `wavPath` and continuing through this flow as normal. If the result has `autoStopped: true`, the recording had already ended by itself — carry on with the transcription exactly as normal, and mention the reason once ("the recording had already stopped — [autoStopReason]") rather than treating it as an error.
 2. Call `transcribe` with the returned `outputPath`. It returns:
    - `transcript` — the full text
    - `segments` — `{ text, fromMs, toMs }` per utterance

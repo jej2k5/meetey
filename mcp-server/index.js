@@ -25,7 +25,9 @@ import { assessQuality, formatDuration, wavDurationMs } from "./quality.js";
 import {
   deleteRecording, getRecording, listRecordings, searchRecordings, systemStatus,
 } from "./library.js";
-import { readActive, writeActive, clearActive } from "./session-state.js";
+import {
+  readActive, writeActive, clearActive, readPending, writePending, clearPending,
+} from "./session-state.js";
 import { watchStatus, enableWatch, disableWatch, watchLog } from "./watch-agent.js";
 
 // --- Config ---
@@ -278,9 +280,22 @@ function startRecording({
 
   child.on("exit", () => {
     if (activeRecording?.sessionId === id) {
-      finishedRecording = { ...recording, process: null, stoppedAt: new Date().toISOString() };
+      const stoppedAt = new Date().toISOString();
+      finishedRecording = { ...recording, process: null, stoppedAt };
       activeRecording = null;
       clearActive(MEETEY_DIR);
+      // In-memory state dies with the session; this survives a restart.
+      if (existsSync(recording.outputPath)) {
+        writePending(MEETEY_DIR, {
+          sessionId: recording.sessionId,
+          outputPath: recording.outputPath,
+          framesDir: recording.framesDir,
+          startedAt: recording.startedAt,
+          stoppedAt,
+          startedBy: "mcp",
+          autoStopReason: recording.autoStopReason,
+        });
+      }
     }
   });
 
@@ -326,6 +341,7 @@ function stopRecording() {
         waitFor(10000, () => existsSync(join(elsewhere.framesDir, "index.json")));
       }
       clearActive(MEETEY_DIR);
+      clearPending(MEETEY_DIR);
       const result = buildStopResult(elsewhere, {
         autoStopped: false,
         stoppedAt: new Date().toISOString(),
@@ -337,12 +353,33 @@ function stopRecording() {
       return result;
     }
 
-    // Already over — the process ended on its own, so there is nothing to
-    // signal. Hand back what it left behind.
-    if (!finishedRecording) return { error: "No active recording." };
-    const done = finishedRecording;
-    finishedRecording = null;
-    return buildStopResult(done, { autoStopped: true, stoppedAt: done.stoppedAt });
+    // Already over. The recording may have ended in another process entirely —
+    // the watch agent's captures do — so the on-disk record is checked before
+    // this server's own in-memory one.
+    const pending = readPending(MEETEY_DIR);
+    if (pending) {
+      clearPending(MEETEY_DIR);
+      const result = buildStopResult(pending, {
+        autoStopped: true,
+        stoppedAt: pending.stoppedAt,
+      });
+      if (pending.startedBy === "watch") {
+        result.startedBy = "watch";
+        result.windowTitle = pending.windowTitle;
+      }
+      return result;
+    }
+
+    if (finishedRecording) {
+      const done = finishedRecording;
+      finishedRecording = null;
+      return buildStopResult(done, { autoStopped: true, stoppedAt: done.stoppedAt });
+    }
+
+    // Nothing to collect. Say what the user can actually do next rather than
+    // leaving them at a dead end — a recording that ended while Claude Code was
+    // closed is still on disk, just unwritten.
+    return { error: "No active recording.", ...unwrittenRecordings() };
   }
 
   const recording = activeRecording;
@@ -353,11 +390,41 @@ function stopRecording() {
   // This stop supersedes anything held from an earlier self-terminated run.
   finishedRecording = null;
   clearActive(MEETEY_DIR);
+  clearPending(MEETEY_DIR);
 
   waitFor(3000, () => existsSync(outputPath));
   if (framesDir) waitFor(10000, () => existsSync(join(framesDir, "index.json")));
 
   return buildStopResult(recording, { autoStopped: false, stoppedAt: new Date().toISOString() });
+}
+
+/**
+ * Recordings with audio but no notes — captured, never written up.
+ *
+ * The pending record only holds the most recent one, and it is lost if a
+ * recording ends while nothing is watching. The library is the durable answer,
+ * so a failed stop can point at real files instead of dead-ending.
+ */
+function unwrittenRecordings() {
+  try {
+    const { recordings } = listRecordings(RECORDINGS_DIR, {});
+    const unwritten = (recordings ?? []).filter((r) => r.files?.audio && !r.files?.notes);
+    if (unwritten.length === 0) return {};
+    const latest = unwritten[0];
+    return {
+      unwrittenCount: unwritten.length,
+      unwritten: unwritten.slice(0, 5).map((r) => ({
+        sessionId: r.sessionId,
+        wavPath: r.files.audio.path,
+        date: r.date ?? null,
+      })),
+      hint:
+        `${unwritten.length} recording(s) have audio but no notes. The most recent is ` +
+        `${latest.sessionId}; call transcribe with its wavPath to write it up.`,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function buildStopResult(recording, { autoStopped, stoppedAt }) {
