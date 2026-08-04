@@ -110,6 +110,47 @@ recording until someone deletes it by hand.
 runs whisper as soon as a recording ends. Re-running it on an hour of audio to
 get a byte-identical result is minutes wasted.
 
+## Call-end detection
+
+`--stop-when-call-ends` (on by default from `start_recording`; `stopWhenCallEnds:
+false` opts out) ends a recording when the *call* ends, as distinct from the app
+closing. This is the thing auto-stop deliberately does not attempt, and it is only
+safe because of how it commits.
+
+**It never stops anything early.** When the microphone is released it records a
+*candidate* end — the time, and the byte offset the recording had reached — and
+keeps recording. If the mic comes back the candidate is discarded and nothing was
+lost. Only after `--call-end-grace` (default 600s) does it commit, and the WAV is
+then truncated back to the candidate offset so the waiting never reaches the
+transcript. Separating *when to stop* from *where the recording ends* is what
+makes a long grace period free, which in turn is what makes the evidence good.
+
+Three guards, each covering a different way the naive version goes wrong:
+
+- **Armed only after the mic has been seen in use.** A recording where no app ever
+  took the microphone is not a call whose end this can detect; without this it
+  would fire on every such recording.
+- **An audible-audio veto.** `WAVWriter` tracks the offset of the last sample above
+  `audibleAmplitude` (300, deliberately low — being wrong in the quiet direction
+  trims a live meeting, being wrong in the loud direction only records longer). If
+  anything was audible after the candidate, the call plainly did not end there:
+  the candidate is dropped and the clock restarts. This is what protects a muted
+  listener whose app releases the mic mid-call.
+- **A failed device query is not "released".** `Microphone.inUse()` returns nil on
+  error and the poll skips that round.
+
+`kAudioDevicePropertyDeviceIsRunningSomewhere` needs **no microphone permission** —
+it is a device property, not audio content. Verified against a build with none
+granted. Muting yourself does not release the device, so the signal survives it.
+
+Do not swap the mic signal for window-title matching. For Chrome, `SCWindow.title`
+is the *active tab's* title, so switching tabs mid-call looks exactly like hanging
+up.
+
+`MeetingEndMonitor` is a pure state machine; `--selftest` covers unarmed silence,
+the grace period, blip recovery with a restarted clock, byte-accurate truncation
+including the odd-byte case, and the audible/silent distinction.
+
 ## Auto-stop
 
 `--auto-stop` (passed by default from `start_recording`; set `autoStop: false` to

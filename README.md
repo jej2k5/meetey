@@ -65,8 +65,6 @@ Or use the hotkeys:
 2. Run `/meetey start` — Claude detects the running app, asks whether to capture screen content, and begins recording
 3. When the meeting ends, run `/meetey stop` — Claude transcribes the audio, reads any screen content, and produces:
 
-Forget step 3 and the recording still ends itself when the app quits or the captured window closes, so a forgotten `/meetey stop` costs a little disk rather than a runaway recording. Run `/meetey stop` afterwards anyway to write the notes — it picks the finished recording up and tells you why it ended.
-
 ```
 ## Q3 Roadmap and API Cutover
 
@@ -91,6 +89,13 @@ Full transcript: `2026-08-01-1402-q3-roadmap-transcript.md` · 6,180 words
 **Every claim carries the timestamp it came from.** If you doubt a decision, jump straight to that moment in the transcript instead of searching thousands of words.
 
 Notes are written to `~/.meetey/recordings/` as `YYYY-MM-DD-HHMM-<slug>.md` — chronologically sortable, so `ls` is a meeting history. The transcript lives in a sibling `-transcript.md` file rather than inline, so the notes stay scannable.
+
+### If you forget to stop
+
+Forget step 3 and the recording still ends itself — when your call ends, or when the app quits or the captured window closes. Run `/meetey stop` afterwards anyway to write the notes; it picks the finished recording up and tells you why it ended.
+
+Ending on the call itself is worth explaining, because it works differently than you'd expect. Meetey watches whether the meeting app is holding the microphone, which apps release when you hang up (muting yourself doesn't count — that's just a switch). But that clue is occasionally wrong, and stopping a live meeting by mistake loses audio you can't get back. So instead of stopping, it notes the time and **keeps recording**. If the call turns out to still be going, the note is thrown away and nothing is lost. Only after ten quiet minutes — and only if nobody spoke during them — does it stop, and then it cuts the file back to the moment you actually hung up. The waiting never reaches your transcript.
+
 
 When the transcription is unreliable, the notes say so at the top instead of summarizing noise with a confident voice:
 
@@ -294,7 +299,8 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Slide changes missed | Lower `--scene-threshold` (fewer cells needed to count as a new scene) |
 | Keyframe text is garbled | Confirm the meeting window isn't scaled down; OCR runs on the captured resolution |
 | Keyframes from the wrong screen | Pass a `displayID`, or pick a window — Meetey otherwise guesses from where the app is |
-| Recording stopped early | It ends when the app quits or the captured window closes. Rejoining in a new window won't resume it |
+| Recording stopped early | It ends when your call ends, the app quits, or the captured window closes. Rejoining in a new window won't resume it |
+| Recording didn't stop when the call ended | Only fires if the app took the microphone in the first place — joining by phone while sharing your screen leaves nothing to detect. It falls back to stopping when the app quits |
 | `/meetey stop` says no recording is active | If it already stopped itself, `/meetey stop` still collects it. If that fails, the WAV is in `~/.meetey/recordings/` |
 | Watcher never asks | `/meetey watch log`. `could not list windows` means Node needs Screen Recording permission, separately from the capture binary |
 | Watcher asks about things that aren't meetings | Expected — it errs toward asking. Say "Not now" and it drops that window |

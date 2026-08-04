@@ -44,6 +44,8 @@ struct Args {
     let volatilityMask: Bool
     let autoStop: Bool
     let autoStopGrace: TimeInterval
+    let stopWhenCallEnds: Bool
+    let callEndGrace: TimeInterval
 
     static func parse() -> Args {
         var bundleID = ""
@@ -65,6 +67,8 @@ struct Args {
         var volatilityMask = true
         var autoStop = false
         var autoStopGrace: TimeInterval = 30
+        var stopWhenCallEnds = false
+        var callEndGrace: TimeInterval = 600
         let args = CommandLine.arguments.dropFirst()
         var it = args.makeIterator()
         while let arg = it.next() {
@@ -88,6 +92,8 @@ struct Args {
             case "--no-volatility-mask": volatilityMask = false
             case "--auto-stop":       autoStop = true
             case "--auto-stop-grace": autoStopGrace = TimeInterval(it.next() ?? "") ?? 30
+            case "--stop-when-call-ends": stopWhenCallEnds = true
+            case "--call-end-grace":  callEndGrace = TimeInterval(it.next() ?? "") ?? 600
             default: break
             }
         }
@@ -98,7 +104,8 @@ struct Args {
                     framesDir: framesDir, ocr: ocr, sceneThreshold: sceneThreshold,
                     maxFrames: maxFrames, maxUnsettled: maxUnsettled,
                     volatilityMask: volatilityMask, autoStop: autoStop,
-                    autoStopGrace: autoStopGrace)
+                    autoStopGrace: autoStopGrace, stopWhenCallEnds: stopWhenCallEnds,
+                    callEndGrace: callEndGrace)
     }
 }
 
@@ -110,6 +117,41 @@ final class WAVWriter {
     private let sampleRate: UInt32 = 16000
     private let channels: UInt16 = 1
     private let bitsPerSample: UInt16 = 16
+    /// `dataByteCount` is written on the audio queue and read by the call-end
+    /// poll on another thread.
+    private let counterLock = NSLock()
+
+    static let headerBytes: UInt32 = 44
+
+    /// How far the recording has got, as a byte offset into the data chunk.
+    /// Safe to call from any thread.
+    var bytesWritten: UInt32 {
+        counterLock.lock()
+        defer { counterLock.unlock() }
+        return dataByteCount
+    }
+
+    /// Seconds of audio in a given number of data bytes.
+    func seconds(forDataBytes bytes: UInt32) -> Double {
+        Double(bytes) / (Double(sampleRate) * Double(channels) * Double(bitsPerSample) / 8)
+    }
+
+    /// Data-chunk offset at which audible sound was last written.
+    ///
+    /// A second opinion on whether a call has really ended: the microphone being
+    /// released says the app thinks it is over, this says nobody is still
+    /// talking. Both must agree before a recording is cut back.
+    private var lastAudibleByteCount: UInt32 = 0
+    var lastAudibleOffset: UInt32 {
+        counterLock.lock()
+        defer { counterLock.unlock() }
+        return lastAudibleByteCount
+    }
+
+    /// Deliberately low. Being wrong in the quiet direction means trimming a
+    /// live meeting; being wrong in the loud direction just means recording a
+    /// little longer, so anything above near-digital-silence counts as speech.
+    private let audibleAmplitude: Int16 = 300
 
     init(path: String) throws {
         FileManager.default.createFile(atPath: path, contents: nil)
@@ -145,17 +187,45 @@ final class WAVWriter {
             data.append(contentsOf: withUnsafeBytes(of: le) { Data($0) })
         }
         fileHandle.write(data)
+
+        var audible = false
+        for sample in samples where abs(Int(sample)) > Int(audibleAmplitude) {
+            audible = true
+            break
+        }
+
+        counterLock.lock()
         dataByteCount += UInt32(data.count)
+        if audible { lastAudibleByteCount = dataByteCount }
+        counterLock.unlock()
     }
 
-    func finalize() {
+    /// Closes the file. `trimmingToDataBytes` cuts the recording back to an
+    /// earlier point — used when the call turned out to have ended before we
+    /// stopped recording, so the trailing silence never reaches the transcript.
+    /// The audio is uncompressed, so this is a truncation and a header rewrite,
+    /// not a re-encode.
+    @discardableResult
+    func finalize(trimmingToDataBytes trim: UInt32? = nil) -> UInt32 {
         func le<T: FixedWidthInteger>(_ v: T) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
-        let riffSize = 36 + dataByteCount
+
+        var finalBytes = bytesWritten
+        if var trim, trim < finalBytes {
+            // Never cut mid-sample: a 16-bit frame is two bytes and half of one
+            // is noise at the end of the file.
+            let frameBytes = UInt32(channels * bitsPerSample / 8)
+            trim -= trim % frameBytes
+            try? fileHandle.truncate(atOffset: UInt64(Self.headerBytes + trim))
+            finalBytes = trim
+        }
+
+        let riffSize = 36 + finalBytes
         fileHandle.seek(toFileOffset: 4)
         fileHandle.write(le(riffSize))
         fileHandle.seek(toFileOffset: 40)
-        fileHandle.write(le(dataByteCount))
+        fileHandle.write(le(finalBytes))
         fileHandle.closeFile()
+        return finalBytes
     }
 }
 
@@ -657,6 +727,81 @@ final class KeyframeWriter {
     }
 }
 
+// MARK: - Call-end detection
+
+/// Whether any process currently holds the default input device.
+///
+/// This is a device *property*, not audio content, so it needs no microphone
+/// permission — verified against a build with none granted. Meeting apps take the
+/// input device when you join a call and release it when you leave; muting
+/// yourself is a software flag and does not release it, which is what makes this
+/// a usable proxy for "a call is in progress".
+enum Microphone {
+    static func inUse() -> Bool? {
+        var device = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var deviceAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+                                         &deviceAddress, 0, nil, &size, &device) == noErr else { return nil }
+
+        var running = UInt32(0)
+        var runningSize = UInt32(MemoryLayout<UInt32>.size)
+        var runningAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(device, &runningAddress, 0, nil,
+                                         &runningSize, &running) == noErr else { return nil }
+        return running != 0
+    }
+}
+
+/// Decides that a *call* has ended, as opposed to the app closing.
+///
+/// The naive version of this — stop as soon as the mic is released — truncates a
+/// live meeting whenever the signal is wrong, and the user does not find out
+/// until afterwards. So this never stops anything early. It notes where the
+/// recording stood when the mic went quiet and keeps recording; if the mic comes
+/// back, the note is thrown away and nothing was lost. Only once the signal has
+/// held for the full grace period does it commit, and the recording is then cut
+/// back to the noted point so the waiting never reaches the transcript.
+///
+/// Because waiting costs nothing, the grace can be long enough to be sure.
+struct MeetingEndMonitor {
+    let grace: TimeInterval
+    /// Set once the mic has been seen in use. Until then this stays silent: a
+    /// recording where no app ever took the mic is not a call whose end we can
+    /// detect, and firing on that would kill legitimate recordings that simply
+    /// never involved a microphone.
+    private var armed = false
+    private var candidate: (since: Date, mark: UInt32)?
+
+    init(grace: TimeInterval) { self.grace = grace }
+
+    var isArmed: Bool { armed }
+    var hasCandidate: Bool { candidate != nil }
+
+    /// `mark` is how far the recording had got at this poll — the point to cut
+    /// back to if the call really did end here. Returns that point once the call
+    /// is confirmed over, nil otherwise.
+    mutating func update(micInUse: Bool, mark: UInt32, at now: Date) -> UInt32? {
+        if micInUse {
+            armed = true
+            candidate = nil
+            return nil
+        }
+        guard armed else { return nil }
+
+        let current = candidate ?? (since: now, mark: mark)
+        candidate = current
+        guard now.timeIntervalSince(current.since) >= grace else { return nil }
+        return current.mark
+    }
+}
+
 // MARK: - Auto-stop
 
 /// Decides when a recording should end without being told to.
@@ -1038,8 +1183,102 @@ func selfTest() throws {
     }
     print("  autostop: grace period, blip recovery, app-quit and window-close all behave")
 
+    // --- Call end: never cut a live meeting, never keep the silence. ----------
+    // A recording where no app ever took the microphone is not a call, and must
+    // never be ended by this. Otherwise every non-call recording dies.
+    var unarmed = MeetingEndMonitor(grace: 600)
+    for s in stride(from: 0.0, through: 3600, by: 5) {
+        if unarmed.update(micInUse: false, mark: 1000, at: at(s)) != nil {
+            failures.append("callend: ended a recording where the mic was never in use")
+            break
+        }
+    }
+
+    // The ordinary case: mic goes quiet, stays quiet, recording cuts back to the
+    // moment it went quiet — not to the moment we became confident.
+    var ended = MeetingEndMonitor(grace: 600)
+    _ = ended.update(micInUse: true, mark: 100, at: at(0))
+    if ended.update(micInUse: false, mark: 320_000, at: at(100)) != nil {
+        failures.append("callend: committed immediately instead of waiting out the grace period")
+    }
+    if ended.update(micInUse: false, mark: 640_000, at: at(400)) != nil {
+        failures.append("callend: committed before the grace period elapsed")
+    }
+    let cut = ended.update(micInUse: false, mark: 999_999, at: at(700))
+    if cut != 320_000 {
+        failures.append("callend: cut back to \(cut.map(String.init) ?? "nil"), expected the mark from when the mic went quiet (320000)")
+    }
+
+    // The dangerous case. The mic drops briefly while the meeting is still
+    // going; nothing may be lost, and the clock must start over afterwards.
+    var blipped = MeetingEndMonitor(grace: 600)
+    _ = blipped.update(micInUse: true, mark: 0, at: at(0))
+    _ = blipped.update(micInUse: false, mark: 100_000, at: at(60))
+    _ = blipped.update(micInUse: false, mark: 200_000, at: at(120))
+    if blipped.update(micInUse: true, mark: 300_000, at: at(180)) != nil {
+        failures.append("callend: ended a meeting that was still going")
+    }
+    if blipped.update(micInUse: false, mark: 400_000, at: at(240)) != nil {
+        failures.append("callend: did not discard the candidate when the mic came back")
+    }
+    // 240 + 600 = 840. The new candidate, not the abandoned one at 60s.
+    if blipped.update(micInUse: false, mark: 900_000, at: at(830)) != nil {
+        failures.append("callend: reused the abandoned candidate's clock")
+    }
+    let second = blipped.update(micInUse: false, mark: 950_000, at: at(841))
+    if second != 400_000 {
+        failures.append("callend: cut back to \(second.map(String.init) ?? "nil"), expected the second candidate (400000)")
+    }
+    print("  callend: unarmed stays silent, grace enforced, blip recovers, cut lands where the mic went quiet")
+
+    // --- Trimming actually truncates the WAV and fixes its header. ------------
+    let wavPath = root.appendingPathComponent("trim.wav").path
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let trimWriter = try WAVWriter(path: wavPath)
+    // 10s of audio at 16 kHz mono 16-bit.
+    trimWriter.append(samples: [Int16](repeating: 0, count: 16000 * 10))
+    let keptBytes = trimWriter.finalize(trimmingToDataBytes: 16000 * 2 * 4 + 1) // 4s, odd byte
+    let onDisk = (try? FileManager.default.attributesOfItem(atPath: wavPath))?[.size] as? Int ?? 0
+    let header = try FileHandle(forReadingFrom: URL(fileURLWithPath: wavPath))
+    header.seek(toFileOffset: 40)
+    let declared = header.readData(ofLength: 4).withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+    try? header.close()
+
+    if keptBytes != 16000 * 2 * 4 {
+        failures.append("trim: kept \(keptBytes) bytes, expected 128000 (odd byte should round down to a whole sample)")
+    }
+    if onDisk != Int(WAVWriter.headerBytes) + 128_000 {
+        failures.append("trim: file is \(onDisk) bytes on disk, expected \(Int(WAVWriter.headerBytes) + 128_000)")
+    }
+    if declared != 128_000 {
+        failures.append("trim: header declares \(declared) data bytes, expected 128000 — a reader would run past the end")
+    }
+    print("  trim: 10s recording cut to 4s, file truncated and header rewritten to match")
+
+    // --- Audible-audio veto: silence and speech must be told apart. ----------
+    let vetoPath = root.appendingPathComponent("veto.wav").path
+    let vetoWriter = try WAVWriter(path: vetoPath)
+    vetoWriter.append(samples: [Int16](repeating: 0, count: 16000))          // 1s silence
+    let afterSilence = vetoWriter.lastAudibleOffset
+    vetoWriter.append(samples: (0..<16000).map { _ in Int16.random(in: 4000...8000) }) // 1s speech
+    let afterSpeech = vetoWriter.lastAudibleOffset
+    vetoWriter.append(samples: [Int16](repeating: 0, count: 16000))          // 1s silence
+    let afterTrailing = vetoWriter.lastAudibleOffset
+    vetoWriter.finalize()
+
+    if afterSilence != 0 {
+        failures.append("veto: silence registered as audible (offset \(afterSilence)) — would refuse to ever trim")
+    }
+    if afterSpeech != 16000 * 2 * 2 {
+        failures.append("veto: speech left the audible mark at \(afterSpeech), expected 64000")
+    }
+    if afterTrailing != afterSpeech {
+        failures.append("veto: trailing silence moved the audible mark — trimming would never fire")
+    }
+    print("  veto: silence and speech distinguished, so a call that is still talking is never cut")
+
     if failures.isEmpty {
-        print("selftest: PASS (settling, volatility mask, cadence, revisit dedup, unsettled valve, auto-stop, OCR + manifest OK)")
+        print("selftest: PASS (settling, volatility mask, cadence, revisit dedup, unsettled valve, auto-stop, call-end trim, OCR + manifest OK)")
         exit(0)
     }
     for failure in failures { fputs("selftest: FAIL — \(failure)\n", stderr) }
@@ -1290,6 +1529,47 @@ func record(args: Args) async throws {
         }
     }
 
+    // Where to cut the recording back to, if the call turns out to have ended
+    // before we stopped. Written by the poll below, read by finalize.
+    let trimLock = NSLock()
+    var trimToBytes: UInt32? = nil
+
+    if args.stopWhenCallEnds {
+        Task {
+            var monitor = MeetingEndMonitor(grace: args.callEndGrace)
+            var everArmed = false
+            while true {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+
+                // Unable to read the device is not the same as the mic being
+                // free. Treating it as free would end a live meeting.
+                guard let inUse = Microphone.inUse() else { continue }
+
+                let mark = writer.bytesWritten
+                if let cutTo = monitor.update(micInUse: inUse, mark: mark, at: Date()) {
+                    // The mic says the call is over. Before acting on that, check
+                    // the audio we have actually been recording — if anyone has
+                    // spoken since, the meeting plainly did not end there and the
+                    // signal was wrong. Keep recording and start over.
+                    if writer.lastAudibleOffset > cutTo {
+                        fputs("meetey-capture: microphone released but audio continued — still recording\n", stderr)
+                        monitor = MeetingEndMonitor(grace: args.callEndGrace)
+                        continue
+                    }
+                    trimLock.withLock { trimToBytes = cutTo }
+                    let trimmed = writer.seconds(forDataBytes: mark - cutTo)
+                    fputs(String(format: "meetey-capture: call ended — trimming back %.0fs of silence\n", trimmed), stderr)
+                    fireOnce()
+                    return
+                }
+                if monitor.isArmed && !everArmed {
+                    everArmed = true
+                    fputs("meetey-capture: microphone in use — call-end detection armed\n", stderr)
+                }
+            }
+        }
+    }
+
     if args.autoStop {
         let targetBundleID = args.bundleID
         let targetWindowID = args.windowID
@@ -1328,7 +1608,12 @@ func record(args: Args) async throws {
     for await _ in stopStream { break }
 
     try await stream.stopCapture()
-    writer.finalize()
+    let cutTo = trimLock.withLock { trimToBytes }
+    let finalBytes = writer.finalize(trimmingToDataBytes: cutTo)
+    if cutTo != nil {
+        fputs(String(format: "meetey-capture: recording trimmed to %.0fs\n",
+                     writer.seconds(forDataBytes: finalBytes)), stderr)
+    }
     if let keyframes {
         let result = keyframes.finalize()
         fputs("meetey-capture: wrote \(result.count) keyframe(s)\(result.truncated ? " (truncated at limit)" : "")\n", stderr)
@@ -1363,6 +1648,11 @@ Task {
                                             window given to --window closes
                   --auto-stop-grace <secs>  How long that must hold before
                                             stopping (default 30)
+                  --stop-when-call-ends     Also stop when the meeting app releases
+                                            the microphone, trimming the recording
+                                            back to when that happened
+                  --call-end-grace <secs>   How long the mic must stay released
+                                            before believing it (default 600)
                   --display <id>            Display to capture (default: the one
                                             showing the target app)
                   --window <id>             Capture only this window of the app,

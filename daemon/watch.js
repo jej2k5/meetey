@@ -168,6 +168,10 @@ function startRecording(window) {
     "--app", window.bundleID,
     "--output", outputPath,
     "--auto-stop",
+    // Matters more here than anywhere: nobody is watching a recording the agent
+    // started, so without this it runs until the app quits — which for Chrome
+    // could be days.
+    "--stop-when-call-ends",
   ];
 
   const child = spawn(CAPTURE_BINARY, args, { stdio: ["ignore", "ignore", "pipe"] });

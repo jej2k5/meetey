@@ -185,6 +185,7 @@ function startRecording({
   displayID,
   windowID,
   autoStop = true,
+  stopWhenCallEnds = true,
 }) {
   if (activeRecording) {
     return { error: "A recording is already active. Call stop_recording first." };
@@ -214,6 +215,12 @@ function startRecording({
   // it prevents (a recording left running for hours after everyone hung up) is
   // both common and costly.
   if (autoStop !== false) args.push("--auto-stop");
+
+  // Ends the recording when the meeting app releases the microphone, cutting the
+  // file back to when that happened. It never stops anything early: a candidate
+  // end is only committed after a long quiet period, and only if the audio we
+  // recorded confirms nobody was still talking.
+  if (stopWhenCallEnds !== false) args.push("--stop-when-call-ends");
 
   // Video is opt-in per recording. There is deliberately no env var or config
   // file that can turn it on by default — it must be requested every time.
@@ -624,6 +631,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           bundleID: {
             type: "string",
             description: "App bundle ID. Use list_apps to get valid values.",
+          },
+          stopWhenCallEnds: {
+            type: "boolean",
+            description:
+              "End the recording when the meeting app releases the microphone, trimming it back " +
+              "to that moment (default true). Waits 10 minutes and cross-checks the recorded " +
+              "audio before acting, so a live meeting is not cut short. Has no effect on a " +
+              "recording where no app ever used the microphone.",
           },
           autoStop: {
             type: "boolean",
