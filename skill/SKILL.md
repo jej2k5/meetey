@@ -63,6 +63,8 @@ Meetey — local meeting capture
 7. Call `start_recording` with the chosen `bundleID`, `captureVideo: true` only if the user explicitly opted in, and `windowID`/`displayID` when the user chose them.
 8. Confirm to the user: "Recording started[, capturing screen content from <window title>]. Run `/meetey stop` or press `Ctrl+Shift+S` when the meeting ends."
 
+The recording also ends itself if the app quits, or if the chosen window closes — so forgetting to stop costs a little disk, not a runaway recording. Don't advertise this as "it knows when your meeting ends": it does not detect a call ending while the app keeps running, and saying otherwise would leave someone expecting a stop that never comes.
+
 **Chrome note:** Chrome captures all tab audio, not just the meeting tab. Close other tabs playing audio or mute them before starting.
 
 **A single browser tab cannot be captured.** ScreenCaptureKit works at the window level and has no concept of a tab, so selecting a window narrows capture to that window — not to the tab currently shown in it. Say this plainly rather than implying tab-level control. If the user wants exactly one tab isolated, tell them to drag it into its own window and select that window. Note too that switching tabs inside the captured window captures the new tab.
@@ -73,7 +75,7 @@ Meetey — local meeting capture
 
 ### Gather
 
-1. Call `stop_recording`. If no recording is active, say so.
+1. Call `stop_recording`. If no recording is active, say so. If the result has `autoStopped: true`, the recording had already ended by itself — carry on with the transcription exactly as normal, and mention the reason once ("the recording had already stopped — [autoStopReason]") rather than treating it as an error.
 2. Call `transcribe` with the returned `outputPath`. It returns:
    - `transcript` — the full text
    - `segments` — `{ text, fromMs, toMs }` per utterance
@@ -156,6 +158,7 @@ Full transcript: [`<notes-stem>-transcript.md`] · [N] words · [model]
 
 Call `get_status` and report:
 - If active: "Recording in progress since [startedAt] — session [sessionId]." Add "Capturing screen content." when `capturingVideo` is true.
+- If `autoStopped` is true: "The recording stopped on its own — [autoStopReason] — and hasn't been transcribed yet. Run `/meetey stop` to write it up." Say this rather than "no recording active"; the audio is sitting there unprocessed and the user almost certainly wants it.
 - If inactive: "No recording active."
 
 This is about the *live* recording only. For the health of the install, use `/meetey doctor`.

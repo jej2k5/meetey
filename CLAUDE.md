@@ -34,7 +34,7 @@ User → /meetey (skill) → MCP server (Node.js) → meetey-capture (Swift CLI)
                                               → whisper-cli
 ```
 
-**`meetey-capture/`** — Swift CLI using ScreenCaptureKit. Takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, stops on SIGTERM/SIGINT or after `--stop-after <seconds>` of wall-clock time. Also supports `--list-apps` (prints running supported apps as JSON), `--selftest` (exercises the keyframe pipeline with synthetic frames, no permission needed), and the `--video` flags below. Requires macOS 13+.
+**`meetey-capture/`** — Swift CLI using ScreenCaptureKit. Takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, stops on SIGTERM/SIGINT, after `--stop-after <seconds>` of wall-clock time, or via `--auto-stop`. Also supports `--list-apps` (prints running supported apps as JSON), `--selftest` (exercises the keyframe pipeline with synthetic frames, no permission needed), and the `--video` flags below. Requires macOS 13+.
 
 **`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` by the installer. Thirteen tools in two groups:
 
@@ -60,6 +60,33 @@ Joining the library is the non-obvious part. Three independently-named things ha
 **`skill/SKILL.md`** — The `/meetey` slash command. Capture subcommands: `start` drives `list_apps → start_recording`; `stop` drives `stop_recording → transcribe → get_keyframes` and writes two files; `status` calls `get_status`. Library subcommands map one-to-one onto the admin tools — `list`, `show`, `search`, `delete`, `doctor` for `list_recordings`, `get_recording`, `search_recordings`, `delete_recording`, `system_status`.
 
 The admin tools were reachable by natural language from the start; the subcommands exist because that made them undiscoverable — nothing in the skill menu revealed the library existed. Both routes are supported and neither is the canonical one, so don't redirect a user from one to the other. `system_status` is `doctor` rather than anything containing "status" because `/meetey status` already means "is a recording running".
+
+## Auto-stop
+
+`--auto-stop` (passed by default from `start_recording`; set `autoStop: false` to
+opt out) ends a recording when the target app quits, or when the window given to
+`--window` closes — each after a 30s grace period, so a window destroyed and
+recreated (Zoom does this entering full screen) doesn't cut a live meeting.
+
+It is deliberately **not** meeting detection. It does not try to infer that a
+*call* ended while the app keeps running, because the costs are asymmetric:
+stopping late wastes disk, stopping early loses the rest of a meeting that cannot
+be re-recorded. Don't add heuristics like "the Zoom window title stopped saying
+Meeting" without confronting that asymmetry — and note window titles are
+localized.
+
+App liveness is checked with `NSRunningApplication`, not
+`SCShareableContent.applications`: an app whose windows are all minimized can
+drop out of shareable content while the meeting is still running and still
+producing audio.
+
+`AutoStopMonitor` is a pure state machine so `--selftest` covers the grace
+period, blip recovery, and both stop conditions without a live meeting.
+
+Because the process can now exit on its own, the MCP server keeps the session in
+`finishedRecording` when the child exits unprompted, so `stop_recording` still
+returns the files instead of "No active recording" — which would strand a good
+WAV the user has no obvious way to reach. `get_status` surfaces the same thing.
 
 ## Notes Output
 

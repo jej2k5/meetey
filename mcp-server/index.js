@@ -47,6 +47,11 @@ mkdirSync(RECORDINGS_DIR, { recursive: true });
 // --- State ---
 
 let activeRecording = null; // { process, outputPath, sessionId, startedAt }
+/// A recording whose process ended without being asked to — auto-stop, a crash,
+/// or the app vanishing. Held so `stop_recording` can still hand back the files:
+/// reporting "no active recording" would strand a perfectly good WAV that the
+/// user has no other obvious way to reach.
+let finishedRecording = null;
 
 // --- Helpers ---
 
@@ -144,6 +149,7 @@ function startRecording({
   sceneThreshold,
   displayID,
   windowID,
+  autoStop = true,
 }) {
   if (activeRecording) {
     return { error: "A recording is already active. Call stop_recording first." };
@@ -156,6 +162,12 @@ function startRecording({
   const outputPath = wavPath(id);
   const args = ["--app", bundleID, "--output", outputPath];
   if (stopAfter) args.push("--stop-after", String(stopAfter));
+
+  // On by default. It only ends a recording on signals that cannot mean anything
+  // else — the app quit, or the explicitly-chosen window closed — and the failure
+  // it prevents (a recording left running for hours after everyone hung up) is
+  // both common and costly.
+  if (autoStop !== false) args.push("--auto-stop");
 
   // Video is opt-in per recording. There is deliberately no env var or config
   // file that can turn it on by default — it must be requested every time.
@@ -178,21 +190,32 @@ function startRecording({
     detached: false,
   });
 
-  child.stderr.on("data", (d) => process.stderr.write(d));
-
-  child.on("exit", (code) => {
-    if (activeRecording?.sessionId === id) {
-      activeRecording = null;
-    }
-  });
-
-  activeRecording = {
+  const recording = {
     process: child,
     outputPath,
     framesDir,
     sessionId: id,
     startedAt: new Date().toISOString(),
+    autoStopReason: null,
   };
+
+  child.stderr.on("data", (d) => {
+    const text = d.toString();
+    process.stderr.write(text);
+    // The binary explains itself on the way out; keep the reason so the skill can
+    // tell the user why a recording they didn't stop is no longer running.
+    const reason = text.match(/auto-stop — (.+)/);
+    if (reason) recording.autoStopReason = reason[1].trim();
+  });
+
+  child.on("exit", () => {
+    if (activeRecording?.sessionId === id) {
+      finishedRecording = { ...recording, process: null, stoppedAt: new Date().toISOString() };
+      activeRecording = null;
+    }
+  });
+
+  activeRecording = recording;
 
   return {
     sessionId: id,
@@ -210,14 +233,22 @@ function startRecording({
 }
 
 function stopRecording() {
+  // Already over. The process ended on its own, so there is nothing to signal —
+  // just hand back what it left behind.
   if (!activeRecording) {
-    return { error: "No active recording." };
+    if (!finishedRecording) return { error: "No active recording." };
+    const done = finishedRecording;
+    finishedRecording = null;
+    return buildStopResult(done, { autoStopped: true, stoppedAt: done.stoppedAt });
   }
 
-  const { process: child, outputPath, framesDir, sessionId: id, startedAt } = activeRecording;
+  const recording = activeRecording;
+  const { process: child, outputPath, framesDir } = recording;
 
   child.kill("SIGTERM");
   activeRecording = null;
+  // This stop supersedes anything held from an earlier self-terminated run.
+  finishedRecording = null;
 
   // Give the process a moment to finalize the WAV header, and — when video is
   // on — to drain the encode queue and write the frame manifest.
@@ -230,13 +261,27 @@ function stopRecording() {
   wait(3000, () => existsSync(outputPath));
   if (framesDir) wait(10000, () => existsSync(join(framesDir, "index.json")));
 
+  return buildStopResult(recording, { autoStopped: false, stoppedAt: new Date().toISOString() });
+}
+
+function buildStopResult(recording, { autoStopped, stoppedAt }) {
+  const { outputPath, framesDir, sessionId: id, startedAt, autoStopReason } = recording;
+
   const result = {
     sessionId: id,
     outputPath,
     startedAt,
-    stoppedAt: new Date().toISOString(),
+    stoppedAt,
     message: `Recording saved to ${outputPath}. Call transcribe with this path.`,
   };
+
+  if (autoStopped) {
+    result.autoStopped = true;
+    result.autoStopReason = autoStopReason;
+    result.message = autoStopReason
+      ? `Recording already stopped on its own — ${autoStopReason}. Saved to ${outputPath}. Call transcribe with this path.`
+      : `Recording already stopped on its own. Saved to ${outputPath}. Call transcribe with this path.`;
+  }
 
   if (framesDir) {
     const index = readFrameIndex(framesDir);
@@ -326,6 +371,21 @@ function getKeyframes({ framesDir, sessionId: id }) {
 
 function getStatus() {
   if (!activeRecording) {
+    if (finishedRecording) {
+      return {
+        active: false,
+        autoStopped: true,
+        sessionId: finishedRecording.sessionId,
+        outputPath: finishedRecording.outputPath,
+        framesDir: finishedRecording.framesDir,
+        startedAt: finishedRecording.startedAt,
+        stoppedAt: finishedRecording.stoppedAt,
+        autoStopReason: finishedRecording.autoStopReason,
+        message:
+          "The recording stopped on its own and has not been transcribed yet. " +
+          "Call stop_recording to collect it.",
+      };
+    }
     return { active: false };
   }
   return {
@@ -432,6 +492,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           bundleID: {
             type: "string",
             description: "App bundle ID. Use list_apps to get valid values.",
+          },
+          autoStop: {
+            type: "boolean",
+            description:
+              "End the recording by itself when the app quits, or when the window given as " +
+              "windowID closes (default true, after a 30s grace period). It never tries to " +
+              "infer that a call ended while the app is still running. Pass false to require " +
+              "an explicit stop_recording.",
           },
           stopAfter: {
             type: "number",

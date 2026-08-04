@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+import AppKit
 import Foundation
 import ScreenCaptureKit
 import CoreMedia
@@ -41,6 +42,8 @@ struct Args {
     let maxFrames: Int
     let maxUnsettled: TimeInterval
     let volatilityMask: Bool
+    let autoStop: Bool
+    let autoStopGrace: TimeInterval
 
     static func parse() -> Args {
         var bundleID = ""
@@ -60,6 +63,8 @@ struct Args {
         var maxFrames = 200
         var maxUnsettled: TimeInterval = 60
         var volatilityMask = true
+        var autoStop = false
+        var autoStopGrace: TimeInterval = 30
         let args = CommandLine.arguments.dropFirst()
         var it = args.makeIterator()
         while let arg = it.next() {
@@ -81,6 +86,8 @@ struct Args {
             case "--max-frames":      maxFrames = Int(it.next() ?? "") ?? 200
             case "--max-unsettled":  maxUnsettled = TimeInterval(it.next() ?? "") ?? 60
             case "--no-volatility-mask": volatilityMask = false
+            case "--auto-stop":       autoStop = true
+            case "--auto-stop-grace": autoStopGrace = TimeInterval(it.next() ?? "") ?? 30
             default: break
             }
         }
@@ -90,7 +97,8 @@ struct Args {
                     selfTest: selfTest, video: video, fps: fps,
                     framesDir: framesDir, ocr: ocr, sceneThreshold: sceneThreshold,
                     maxFrames: maxFrames, maxUnsettled: maxUnsettled,
-                    volatilityMask: volatilityMask)
+                    volatilityMask: volatilityMask, autoStop: autoStop,
+                    autoStopGrace: autoStopGrace)
     }
 }
 
@@ -649,6 +657,52 @@ final class KeyframeWriter {
     }
 }
 
+// MARK: - Auto-stop
+
+/// Decides when a recording should end without being told to.
+///
+/// Deliberately conservative: it ends a recording only on signals that cannot
+/// mean anything else — the app is gone, or the window that was explicitly chosen
+/// for capture is gone. It does not try to infer that a *call* ended while the app
+/// keeps running, because the cost of being wrong is asymmetric. Stopping late
+/// wastes disk; stopping early loses the rest of a meeting that cannot be
+/// re-recorded.
+///
+/// Pure state machine, so `--selftest` can exercise the grace-period behaviour
+/// without a live meeting.
+struct AutoStopMonitor {
+    let grace: TimeInterval
+    private var goneSince: Date? = nil
+
+    init(grace: TimeInterval) { self.grace = grace }
+
+    /// `windowPresent` is nil when the recording was not scoped to one window.
+    /// Returns a human-readable reason once the condition has held continuously
+    /// for the grace period, nil until then.
+    mutating func update(appRunning: Bool, windowPresent: Bool?, at now: Date) -> String? {
+        let reason: String?
+        if !appRunning {
+            reason = "the app is no longer running"
+        } else if windowPresent == false {
+            reason = "the captured window was closed"
+        } else {
+            reason = nil
+        }
+
+        // Recovered. Windows are legitimately destroyed and recreated — Zoom does
+        // it entering full screen — so a blip must not end the meeting.
+        guard let reason else {
+            goneSince = nil
+            return nil
+        }
+
+        let since = goneSince ?? now
+        goneSince = since
+        guard now.timeIntervalSince(since) >= grace else { return nil }
+        return reason
+    }
+}
+
 // MARK: - Stream delegate
 
 // SCKit is configured to output Float32 at 16 kHz mono — convert directly to Int16, no resampling needed.
@@ -930,8 +984,62 @@ func selfTest() throws {
     }
     print("  video: \(video.frames.count) keyframe(s) from \(videoCount) samples of constant motion")
 
+    // --- Auto-stop: conservative, and never on a blip. ------------------------
+    let t0 = Date(timeIntervalSince1970: 0)
+    func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
+
+    var healthy = AutoStopMonitor(grace: 30)
+    for s in stride(from: 0.0, through: 300, by: 5) {
+        if healthy.update(appRunning: true, windowPresent: true, at: at(s)) != nil {
+            failures.append("autostop: ended a healthy recording at \(Int(s))s")
+            break
+        }
+    }
+
+    // No window selected: only the app quitting can end the recording.
+    var appOnly = AutoStopMonitor(grace: 30)
+    for s in stride(from: 0.0, through: 300, by: 5) {
+        if appOnly.update(appRunning: true, windowPresent: nil, at: at(s)) != nil {
+            failures.append("autostop: ended an app-scoped recording with the app still running")
+            break
+        }
+    }
+
+    var quit = AutoStopMonitor(grace: 30)
+    if quit.update(appRunning: false, windowPresent: nil, at: at(0)) != nil {
+        failures.append("autostop: fired immediately instead of waiting out the grace period")
+    }
+    if quit.update(appRunning: false, windowPresent: nil, at: at(25)) != nil {
+        failures.append("autostop: fired at 25s with a 30s grace period")
+    }
+    if quit.update(appRunning: false, windowPresent: nil, at: at(30)) == nil {
+        failures.append("autostop: did not fire once the grace period elapsed")
+    }
+
+    // A window destroyed and recreated — Zoom does this entering full screen —
+    // must reset the clock rather than accumulate toward a stop.
+    var blip = AutoStopMonitor(grace: 30)
+    _ = blip.update(appRunning: true, windowPresent: false, at: at(0))
+    _ = blip.update(appRunning: true, windowPresent: false, at: at(20))
+    if blip.update(appRunning: true, windowPresent: true, at: at(25)) != nil {
+        failures.append("autostop: fired on a recovered window")
+    }
+    if blip.update(appRunning: true, windowPresent: false, at: at(40)) != nil {
+        failures.append("autostop: did not reset the grace clock after the window came back")
+    }
+    if blip.update(appRunning: true, windowPresent: false, at: at(75)) == nil {
+        failures.append("autostop: did not fire after the window closed again for a full grace period")
+    }
+
+    var closed = AutoStopMonitor(grace: 30)
+    _ = closed.update(appRunning: true, windowPresent: false, at: at(0))
+    if closed.update(appRunning: true, windowPresent: false, at: at(30)) == nil {
+        failures.append("autostop: a closed captured window did not end the recording")
+    }
+    print("  autostop: grace period, blip recovery, app-quit and window-close all behave")
+
     if failures.isEmpty {
-        print("selftest: PASS (settling, volatility mask, cadence, revisit dedup, unsettled valve, OCR + manifest OK)")
+        print("selftest: PASS (settling, volatility mask, cadence, revisit dedup, unsettled valve, auto-stop, OCR + manifest OK)")
         exit(0)
     }
     for failure in failures { fputs("selftest: FAIL — \(failure)\n", stderr) }
@@ -1182,6 +1290,41 @@ func record(args: Args) async throws {
         }
     }
 
+    if args.autoStop {
+        let targetBundleID = args.bundleID
+        let targetWindowID = args.windowID
+        Task {
+            var monitor = AutoStopMonitor(grace: args.autoStopGrace)
+            while true {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+
+                // NSRunningApplication, not SCShareableContent.applications: an
+                // app whose windows are all minimised can drop out of shareable
+                // content while the meeting is still running and still producing
+                // audio. Process liveness is the question being asked here.
+                let appRunning = !NSRunningApplication
+                    .runningApplications(withBundleIdentifier: targetBundleID).isEmpty
+
+                var windowPresent: Bool? = nil
+                if let id = targetWindowID {
+                    // A failed query means we don't know, not that the window is
+                    // gone. Treating a transient error as "ended" would cut a
+                    // live meeting short.
+                    guard let content = try? await SCShareableContent.current else { continue }
+                    windowPresent = content.windows.contains { $0.windowID == id }
+                }
+
+                if let reason = monitor.update(appRunning: appRunning,
+                                               windowPresent: windowPresent,
+                                               at: Date()) {
+                    fputs("meetey-capture: auto-stop — \(reason)\n", stderr)
+                    fireOnce()
+                    return
+                }
+            }
+        }
+    }
+
     for await _ in stopStream { break }
 
     try await stream.stopCapture()
@@ -1216,6 +1359,10 @@ Task {
 
                 Options:
                   --stop-after <seconds>    Stop automatically after this long
+                  --auto-stop               Stop when the app quits, or when the
+                                            window given to --window closes
+                  --auto-stop-grace <secs>  How long that must hold before
+                                            stopping (default 30)
                   --display <id>            Display to capture (default: the one
                                             showing the target app)
                   --window <id>             Capture only this window of the app,
