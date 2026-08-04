@@ -66,14 +66,31 @@ A menu bar item appears for as long as Meetey is recording, showing what it's re
 ```
                                    ◉ 12:04  ⌄
                           ┌──────────────────────────────┐
-                          │  Recording Weekly Sync       │
-                          │  12:04 elapsed               │
+                          │  Weekly Sync — Google Meet   │
+                          │  Audio only · 12:04          │
                           │  ──────────────────────────  │
                           │  Stop Recording              │
                           └──────────────────────────────┘
 ```
 
-It's there partly as a control and partly so you can always tell at a glance that recording is happening — every other signal Meetey gives you is a single moment, and this one lasts the whole meeting. Stopping from here is the same as `/meetey stop`; run `/meetey stop` afterwards to write up the notes.
+The dot is red while recording, and it tells you **what** is being captured: `Audio only` and `Audio + screen` are different things to have agreed to, and they never look the same.
+
+If Meetey thinks your call has ended, it says so before acting — and lets you overrule it:
+
+```
+                                   ◌ ending soon  ⌄
+                          ┌──────────────────────────────┐
+                          │  Weekly Sync — Google Meet   │
+                          │  Call may have ended · 8:12  │
+                          │  ──────────────────────────  │
+                          │  Keep Recording              │
+                          │  Stop Recording              │
+                          └──────────────────────────────┘
+```
+
+It's there partly as a control and partly so you can always tell at a glance that recording is happening — every other signal Meetey gives you is a single moment, and this one lasts the whole meeting.
+
+Stopping saves the audio; it doesn't write the notes. A notification says so, and `/meetey stop` in Claude Code picks the recording up and writes it up.
 
 ### Workflow
 

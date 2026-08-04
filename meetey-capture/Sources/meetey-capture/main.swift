@@ -748,64 +748,169 @@ final class KeyframeWriter {
 /// buttons* are the thing that would need bundling.)
 @MainActor
 final class RecordingIndicator: NSObject {
+    /// What the recording is doing. Each case has to be distinguishable at a
+    /// glance, without opening the menu and without relying on colour.
+    enum State {
+        case recording
+        /// The call looks over and the recording will trim and stop unless the
+        /// user says otherwise.
+        case endingSoon(remaining: TimeInterval)
+        case stopping
+    }
+
     private let item: NSStatusItem
     private let startedAt: Date
     private let label: String
+    private let capturingVideo: Bool
     private let onStop: () -> Void
+    private let onKeepRecording: () -> Void
     private var timer: Timer?
-    private let elapsedItem: NSMenuItem
+    private var state: State = .recording
+
+    private let titleItem = NSMenuItem()
+    private let statusItem = NSMenuItem()
+    private let keepItem = NSMenuItem()
+    private let stopItem = NSMenuItem()
 
     /// Returns nil when there is no GUI session to draw into — an ssh shell, say.
     /// A missing indicator must never take the recording down with it.
-    init?(label: String, startedAt: Date, onStop: @escaping () -> Void) {
+    init?(label: String, startedAt: Date, capturingVideo: Bool,
+          onStop: @escaping () -> Void, onKeepRecording: @escaping () -> Void) {
         guard !NSScreen.screens.isEmpty else { return nil }
 
         self.startedAt = startedAt
-        self.label = label.isEmpty ? "Meeting" : label
+        self.label = Self.truncateMiddle(label.isEmpty ? "Meeting" : label, to: 40)
+        self.capturingVideo = capturingVideo
         self.onStop = onStop
+        self.onKeepRecording = onKeepRecording
         self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        self.elapsedItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         super.init()
 
-        item.button?.image = NSImage(systemSymbolName: "record.circle.fill",
-                                     accessibilityDescription: "Meetey is recording")
         item.button?.imagePosition = .imageLeading
 
         let menu = NSMenu()
-        let title = NSMenuItem(title: "Recording \(self.label)", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        elapsedItem.isEnabled = false
-        menu.addItem(elapsedItem)
+        titleItem.title = self.label
+        titleItem.isEnabled = false
+        menu.addItem(titleItem)
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
         menu.addItem(.separator())
-        let stop = NSMenuItem(title: "Stop Recording", action: #selector(stopClicked), keyEquivalent: "")
-        stop.target = self
-        menu.addItem(stop)
+
+        // Only shown while a stop is pending. Surfacing that the recording is
+        // about to end obliges us to let the user say no — and that veto is what
+        // makes the automatic stop something done *with* them rather than *to*
+        // them.
+        keepItem.title = "Keep Recording"
+        keepItem.action = #selector(keepClicked)
+        keepItem.target = self
+        keepItem.isHidden = true
+        menu.addItem(keepItem)
+
+        stopItem.title = "Stop Recording"
+        stopItem.action = #selector(stopClicked)
+        stopItem.target = self
+        menu.addItem(stopItem)
         item.menu = menu
 
-        tick()
-        // .common so the countdown keeps moving while the menu is open, which is
-        // exactly when someone is looking at it.
+        render()
+        // .common so the timer keeps running while the menu is open, which is
+        // exactly when someone is reading it.
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+            Task { @MainActor in self?.render() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
 
-    private func tick() {
-        let elapsed = Int(Date().timeIntervalSince(startedAt))
-        item.button?.title = " \(Self.clock(elapsed))"
-        elapsedItem.title = "\(Self.clock(elapsed)) elapsed"
+    func setState(_ newState: State) {
+        state = newState
+        render()
     }
 
-    private static func clock(_ seconds: Int) -> String {
+    // MARK: Rendering
+
+    private func render() {
+        let elapsed = Int(Date().timeIntervalSince(startedAt))
+        let mode = capturingVideo ? "Audio + screen" : "Audio only"
+
+        switch state {
+        case .recording:
+            // Filled and red. A template image renders monochrome and reads as
+            // just another menu bar icon, which is the one thing an indicator
+            // that exists to be noticed must not do.
+            item.button?.image = Self.symbol(capturingVideo ? "rectangle.inset.filled.badge.record"
+                                                            : "record.circle.fill",
+                                             color: .systemRed)
+            item.button?.title = " \(Self.clock(elapsed))"
+            statusItem.title = "\(mode) · \(Self.clock(elapsed))"
+            keepItem.isHidden = true
+            stopItem.isEnabled = true
+            setAccessibility("Meetey recording, \(mode.lowercased()), \(Self.spoken(elapsed))")
+
+        case .endingSoon(let remaining):
+            // Hollow, not merely dimmed: the shape carries the state so it still
+            // reads under menu bar tinting and without colour vision.
+            item.button?.image = Self.symbol("record.circle", color: .secondaryLabelColor)
+            item.button?.title = " ending soon"
+            statusItem.title = "Call may have ended · \(Self.clock(Int(remaining))) left"
+            keepItem.isHidden = false
+            stopItem.isEnabled = true
+            setAccessibility("Meetey may stop recording in \(Self.spoken(Int(remaining))). \(mode).")
+
+        case .stopping:
+            item.button?.image = Self.symbol("record.circle", color: .tertiaryLabelColor)
+            item.button?.title = " …"
+            statusItem.title = "Stopping…"
+            keepItem.isHidden = true
+            stopItem.isEnabled = false
+            setAccessibility("Meetey is stopping the recording")
+        }
+    }
+
+    private func setAccessibility(_ text: String) {
+        item.button?.setAccessibilityLabel(text)
+        // Without this VoiceOver reads the elapsed-time title as the control's
+        // name, which says nothing about what is happening.
+        item.button?.setAccessibilityTitle(text)
+    }
+
+    private static func symbol(_ name: String, color: NSColor) -> NSImage? {
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
+        return base.withSymbolConfiguration(.init(paletteColors: [color]))
+    }
+
+    nonisolated static func clock(_ seconds: Int) -> String {
         let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 
+    /// Durations read aloud as digits are unintelligible; VoiceOver gets words.
+    nonisolated static func spoken(_ seconds: Int) -> String {
+        let m = seconds / 60
+        if m < 1 { return "less than a minute" }
+        if m == 1 { return "1 minute" }
+        if m < 60 { return "\(m) minutes" }
+        let h = m / 60, rem = m % 60
+        return rem == 0 ? "\(h) hour\(h == 1 ? "" : "s")"
+                        : "\(h) hour\(h == 1 ? "" : "s") \(rem) minutes"
+    }
+
+    /// Window titles run long ("Weekly Sync — Google Meet — Google Chrome"). The
+    /// end carries as much meaning as the start, so drop the middle.
+    nonisolated static func truncateMiddle(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        let side = (limit - 1) / 2
+        return "\(text.prefix(side))…\(text.suffix(side))"
+    }
+
     @objc private func stopClicked() {
+        setState(.stopping)
         onStop()
+    }
+
+    @objc private func keepClicked() {
+        setState(.recording)
+        onKeepRecording()
     }
 
     func remove() {
@@ -813,6 +918,23 @@ final class RecordingIndicator: NSObject {
         timer = nil
         NSStatusBar.system.removeStatusItem(item)
     }
+}
+
+/// Posts a user notification without an app bundle.
+///
+/// `UNUserNotificationCenter` needs bundling; `display notification` does not,
+/// which is the same reason the watch agent drives its prompt through osascript.
+func postNotification(title: String, subtitle: String, body: String) {
+    func quoted(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+    let script = "display notification \(quoted(body)) with title \(quoted(title)) subtitle \(quoted(subtitle))"
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.arguments = ["-e", script]
+    try? process.run()
+    process.waitUntilExit()
 }
 
 // MARK: - Call-end detection
@@ -871,6 +993,23 @@ struct MeetingEndMonitor {
 
     var isArmed: Bool { armed }
     var hasCandidate: Bool { candidate != nil }
+
+    /// How long until this candidate would commit, or nil when nothing is pending.
+    /// Drives the "ending soon" readout in the menu bar.
+    func remaining(at now: Date) -> TimeInterval? {
+        guard let candidate else { return nil }
+        return max(0, grace - now.timeIntervalSince(candidate.since))
+    }
+
+    /// Drops the pending candidate and restarts the clock, without disarming.
+    ///
+    /// Replacing the whole monitor instead would clear `armed` too — and since
+    /// `armed` only returns when the mic is *in use*, while a released mic is the
+    /// precondition for ever getting here, that silently disables call-end
+    /// detection for the rest of the recording after a single veto.
+    mutating func resetCandidate() {
+        candidate = nil
+    }
 
     /// `mark` is how far the recording had got at this poll — the point to cut
     /// back to if the call really did end here. Returns that point once the call
@@ -1365,6 +1504,46 @@ func selfTest() throws {
     }
     print("  veto: silence and speech distinguished, so a call that is still talking is never cut")
 
+    // --- Menu bar readout: window titles are user data and run long. ----------
+    let longTitle = "Weekly Sync — Q3 Roadmap and API Cutover — Google Meet — Google Chrome"
+    let truncated = RecordingIndicator.truncateMiddle(longTitle, to: 40)
+    if truncated.count > 40 {
+        failures.append("menubar: truncated title is \(truncated.count) chars, over the 40 limit")
+    }
+    if !truncated.contains("…") {
+        failures.append("menubar: long title was not truncated")
+    }
+    // The tail identifies the meeting as much as the head does; dropping it
+    // leaves several calls looking identical in the menu.
+    if !truncated.hasPrefix("Weekly") || !truncated.hasSuffix("Chrome") {
+        failures.append("menubar: truncation lost the start or end of the title: \(truncated)")
+    }
+    if RecordingIndicator.truncateMiddle("Zoom Meeting", to: 40) != "Zoom Meeting" {
+        failures.append("menubar: a short title was altered")
+    }
+    // Em dashes are ordinary in window titles; splitting a grapheme would corrupt them.
+    if RecordingIndicator.truncateMiddle("A — B", to: 40) != "A — B" {
+        failures.append("menubar: em dash mangled")
+    }
+
+    if RecordingIndicator.clock(59) != "0:59" || RecordingIndicator.clock(600) != "10:00" {
+        failures.append("menubar: sub-hour clock formatting wrong")
+    }
+    if RecordingIndicator.clock(3661) != "1:01:01" {
+        failures.append("menubar: hour-long clock formatting wrong, got \(RecordingIndicator.clock(3661))")
+    }
+    // VoiceOver reads the label aloud; "12:04" spoken as digits is not a duration.
+    if RecordingIndicator.spoken(30) != "less than a minute" {
+        failures.append("menubar: sub-minute duration not spoken as words")
+    }
+    if RecordingIndicator.spoken(60) != "1 minute" || RecordingIndicator.spoken(1500) != "25 minutes" {
+        failures.append("menubar: minute durations not spoken correctly")
+    }
+    if RecordingIndicator.spoken(3600) != "1 hour" || RecordingIndicator.spoken(5400) != "1 hour 30 minutes" {
+        failures.append("menubar: hour durations not spoken correctly, got \(RecordingIndicator.spoken(5400))")
+    }
+    print("  menubar: titles truncate from the middle, clock and spoken durations format correctly")
+
     if failures.isEmpty {
         print("selftest: PASS (settling, volatility mask, cadence, revisit dedup, unsettled valve, auto-stop, call-end trim, OCR + manifest OK)")
         exit(0)
@@ -1617,16 +1796,31 @@ func record(args: Args) async throws {
         }
     }
 
-    var indicator: RecordingIndicator? = nil
-    if args.menuBar {
+    // Carries the user's "Keep Recording" from the menu (main thread) to the
+    // call-end poll (its own Task).
+    let vetoLock = NSLock()
+    var userVetoedEnd = false
+    let keepRecording = { vetoLock.withLock { userVetoedEnd = true } }
+    let takeVeto = { () -> Bool in
+        vetoLock.withLock { let v = userVetoedEnd; userVetoedEnd = false; return v }
+    }
+
+    // Bound as a `let` before the polling Tasks capture it: a captured `var`
+    // crossing into concurrent code is a data race, and an error under Swift 6.
+    let indicator: RecordingIndicator? = await {
+        guard args.menuBar else { return nil }
         let menuLabel = args.label
-        indicator = await MainActor.run {
-            RecordingIndicator(label: menuLabel, startedAt: startedAt, onStop: fireOnce)
+        let capturingVideo = args.video
+        let made = await MainActor.run {
+            RecordingIndicator(label: menuLabel, startedAt: startedAt,
+                               capturingVideo: capturingVideo,
+                               onStop: fireOnce, onKeepRecording: keepRecording)
         }
-        if indicator == nil {
+        if made == nil {
             fputs("meetey-capture: no GUI session — recording without a menu bar indicator\n", stderr)
         }
-    }
+        return made
+    }()
 
     // Where to cut the recording back to, if the call turns out to have ended
     // before we stopped. Written by the poll below, read by finalize.
@@ -1644,6 +1838,15 @@ func record(args: Args) async throws {
                 // free. Treating it as free would end a live meeting.
                 guard let inUse = Microphone.inUse() else { continue }
 
+                // The user saw "ending soon" and said no. Restart the clock —
+                // resetCandidate rather than a fresh monitor, so it stays armed.
+                if takeVeto() {
+                    monitor.resetCandidate()
+                    fputs("meetey-capture: keeping the recording — call-end clock restarted\n", stderr)
+                    await MainActor.run { indicator?.setState(.recording) }
+                    continue
+                }
+
                 let mark = writer.bytesWritten
                 if let cutTo = monitor.update(micInUse: inUse, mark: mark, at: Date()) {
                     // The mic says the call is over. Before acting on that, check
@@ -1652,15 +1855,24 @@ func record(args: Args) async throws {
                     // signal was wrong. Keep recording and start over.
                     if writer.lastAudibleOffset > cutTo {
                         fputs("meetey-capture: microphone released but audio continued — still recording\n", stderr)
-                        monitor = MeetingEndMonitor(grace: args.callEndGrace)
+                        monitor.resetCandidate()
+                        await MainActor.run { indicator?.setState(.recording) }
                         continue
                     }
+                    await MainActor.run { indicator?.setState(.stopping) }
                     trimLock.withLock { trimToBytes = cutTo }
                     let trimmed = writer.seconds(forDataBytes: mark - cutTo)
                     fputs(String(format: "meetey-capture: call ended — trimming back %.0fs of silence\n", trimmed), stderr)
                     fireOnce()
                     return
                 }
+                // Surface a pending stop while it is still reversible, rather
+                // than letting the recording end out of nowhere.
+                let pending = monitor.remaining(at: Date())
+                await MainActor.run {
+                    indicator?.setState(pending.map { .endingSoon(remaining: $0) } ?? .recording)
+                }
+
                 if monitor.isArmed && !everArmed {
                     everArmed = true
                     fputs("meetey-capture: microphone in use — call-end detection armed\n", stderr)
@@ -1715,6 +1927,18 @@ func record(args: Args) async throws {
     if cutTo != nil {
         fputs(String(format: "meetey-capture: recording trimmed to %.0fs\n",
                      writer.seconds(forDataBytes: finalBytes)), stderr)
+    }
+
+    // Stopping saves audio; it does not write notes. Without saying so the user
+    // is left with a file, no summary, and no reason to think anything is
+    // outstanding — the indicator simply vanishes.
+    if indicator != nil {
+        let minutes = max(1, Int((writer.seconds(forDataBytes: finalBytes) / 60).rounded()))
+        postNotification(
+            title: "Meetey",
+            subtitle: "Recording saved · \(minutes) min",
+            body: "Run /meetey stop in Claude Code to write up the notes"
+        )
     }
     if let keyframes {
         let result = keyframes.finalize()

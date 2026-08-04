@@ -126,7 +126,40 @@ A status item does **not** need an app bundle: `.accessory` activation policy pl
 AppKit's run loop is enough, which is why `main.swift` calls `NSApplication.run()`
 instead of `RunLoop.main.run()` when `--menu-bar` is set. (Notification *action
 buttons* are the thing that genuinely requires bundling — see the watch agent,
-which uses `display dialog` for that reason.)
+which uses `display dialog` for that reason. Plain `display notification` needs no
+bundle either, which is how the post-stop notice is posted.)
+
+**The icon must be built with a palette configuration, never left as-is.**
+`NSImage(systemSymbolName:)` returns `isTemplate = true`, and a template image
+renders **monochrome** in the menu bar — indistinguishable from every other icon up
+there, which is the one thing an indicator that exists to be noticed must not be.
+`RecordingIndicator.symbol(_:color:)` applies `SymbolConfiguration(paletteColors:)`,
+which returns a non-template image. This was shipped wrong once; don't revert it.
+
+Four states, and colour is never the only thing separating them — shape carries it
+too, so they survive menu bar tinting and colour-blind users:
+
+| State | Symbol | Colour | Bar |
+|---|---|---|---|
+| Recording, audio | `record.circle.fill` | red | elapsed |
+| Recording, + screen | `rectangle.inset.filled.badge.record` | red | elapsed |
+| Call ending soon | `record.circle` (hollow) | secondary | "ending soon" |
+| Stopping | `record.circle` | tertiary | "…" |
+
+Audio-only and audio-plus-screen must never look identical — they are materially
+different things to have consented to.
+
+**"Keep Recording" appears only while a stop is pending**, and restarts the
+call-end clock via `resetCandidate()`. Surfacing an imminent automatic stop obliges
+us to let the user refuse it; without the veto the feature is something done *to*
+them. It must not construct a fresh `MeetingEndMonitor` — that clears `armed`,
+which can only be set by the mic being *in use*, so a single veto would silently
+disable call-end detection for the rest of the recording.
+
+VoiceOver gets state, not a control name: "Meetey recording, audio only, 25
+minutes". Durations are spoken as words because "12:04" read as digits is not a
+duration. Window titles are middle-truncated to 40 characters — the tail
+identifies a meeting as much as the head does.
 
 `RecordingIndicator.init` is failable and returns nil when `NSScreen.screens` is
 empty — no GUI session, e.g. over ssh. A missing indicator must never take the

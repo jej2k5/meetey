@@ -108,15 +108,27 @@ function escapeAppleScript(text) {
  * A real modal with buttons, from a plain CLI. Notification *action buttons*
  * need a signed .app bundle; `display dialog` does not.
  */
-function askToRecord(window) {
-  const title = (window.title ?? "").slice(0, 120);
-  const message =
-    `Meetey noticed a meeting:\n\n${title}\n\n` +
-    `Record it? Audio only — screen content is never captured without a separate prompt.`;
+const APP_NAMES = {
+  "com.google.Chrome": "Chrome",
+  "us.zoom.xos": "Zoom",
+  "com.microsoft.teams": "Teams",
+};
 
+function askToRecord(window) {
+  const app = APP_NAMES[window.bundleID] ?? "a meeting app";
+  const title = (window.title ?? "").slice(0, 90);
+  const message =
+    `Meetey noticed a meeting in ${app}:\n\n${title}\n\n` +
+    `Record the audio? Screen content is never captured without a separate ` +
+    `prompt, and the recording stops on its own when the call ends.`;
+
+  // No default button, deliberately. This alert appears unprompted and can take
+  // focus mid-call; with a default, an absent-minded Return starts recording a
+  // room full of people. Consent should cost one deliberate click. Escape still
+  // declines, so dismissing stays cheap.
   const script =
     `display dialog "${escapeAppleScript(message)}" ` +
-    `buttons {"Not now", "Record"} default button "Record" ` +
+    `buttons {"Not now", "Record"} ` +
     `with title "Meetey" with icon note giving up after ${PROMPT_TIMEOUT_S}`;
 
   try {
@@ -124,8 +136,7 @@ function askToRecord(window) {
       encoding: "utf8",
       timeout: (PROMPT_TIMEOUT_S + 15) * 1000,
     });
-    // Timing out is not consent. `giving up after` returns gave up:true with the
-    // default button still named, so it has to be checked before the button.
+    // Timing out is not consent.
     if (/gave up:true/.test(out)) return false;
     return /button returned:Record/.test(out);
   } catch {
