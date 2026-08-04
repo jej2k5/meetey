@@ -53,10 +53,19 @@ Meetey — local meeting capture
    > Also capture screen content (slides, screen shares, code)? This captures **everything [App Name] displays** — including other tabs, windows, and notifications — so mute or close anything sensitive first. Audio-only is the default. [y/N]
 
    Never skip this question when the user hasn't answered it, and never assume yes. Screen capture is opt-in for every single recording — there is no setting that turns it on permanently, by design.
-6. Call `start_recording` with the chosen `bundleID`, and `captureVideo: true` only if the user explicitly opted in.
-7. Confirm to the user: "Recording started[, capturing screen content]. Run `/meetey stop` or press `Ctrl+Shift+S` when the meeting ends."
+6. **If — and only if — the user opted into screen capture, narrow the source.** Call `list_windows` with the chosen `bundleID` and offer the titled windows as a numbered list, defaulting to the whole app:
 
-**Chrome note:** Chrome captures all tab audio, not just the meeting tab. Close other tabs playing audio or mute them before starting. With screen capture on, the same applies visually.
+   > Which window? Capturing just one keeps the app's other windows and its notification banners out of frame entirely.
+   > 1. Weekly Sync — Google Meet
+   > 2. Everything Chrome shows (default)
+
+   Then call `list_displays`. **Only ask about the display when it returns more than one** — otherwise pick silently. Skip this whole step for audio-only recordings; there is nothing visual to narrow.
+7. Call `start_recording` with the chosen `bundleID`, `captureVideo: true` only if the user explicitly opted in, and `windowID`/`displayID` when the user chose them.
+8. Confirm to the user: "Recording started[, capturing screen content from <window title>]. Run `/meetey stop` or press `Ctrl+Shift+S` when the meeting ends."
+
+**Chrome note:** Chrome captures all tab audio, not just the meeting tab. Close other tabs playing audio or mute them before starting.
+
+**A single browser tab cannot be captured.** ScreenCaptureKit works at the window level and has no concept of a tab, so selecting a window narrows capture to that window — not to the tab currently shown in it. Say this plainly rather than implying tab-level control. If the user wants exactly one tab isolated, tell them to drag it into its own window and select that window. Note too that switching tabs inside the captured window captures the new tab.
 
 ---
 
@@ -71,7 +80,7 @@ Meetey — local meeting capture
    - `durationMs` / `durationLabel` — exact length, read from the WAV header
    - `model` — the Whisper model that produced this
    - `quality` — `{ level, reason, spokenWordsPerMinute, degradedRatio, silenceRatio }`, where `level` is `good`, `fair`, `poor`, or `unusable`
-3. If the stop result includes `framesDir`, call `get_keyframes` with it. Each frame has `path`, `offsetMs`, and usually `ocrText`.
+3. If the stop result includes `framesDir`, call `get_keyframes` with it. Each frame has `path`, `offsetMs`, and usually `ocrText`. A frame may also have `revisitsMs`: later offsets at which that same screen came back on stage. Treat those as additional timestamps for the same content — a slide the group returned to is usually one they argued about, and it is worth a Screen Content line at the offset it came back, not just when it first appeared.
 4. If transcription fails, report the error and point the user at the Troubleshooting table in the README.
 
 ### Interpret
@@ -271,4 +280,6 @@ a silent or empty recording rather than an error, so it is the likeliest cause o
 | Blank or garbled transcript | Check Screen Recording permission in System Settings → Privacy & Security |
 | Chrome captures wrong audio | Mute other tabs playing audio before starting the recording |
 | No keyframes captured | The recording must be started with screen capture opted in; check `capturingVideo` via `get_status` |
-| Too many near-identical keyframes | A video tile or animation was on screen. Re-run with a higher `--scene-threshold`, or use audio-only for camera-heavy calls |
+| Too many near-identical keyframes | Pass a higher `sceneThreshold` to `start_recording` (default 12). Narrowing to one window with `windowID` usually helps more, since it removes the app's other windows from the frame |
+| Keyframes captured only from part of the meeting | Screen capture picks one window or display for the whole session. If the meeting moved to another window or screen, re-record with the right `windowID`/`displayID` |
+| Keyframes missing a slide that was on screen | Lower `sceneThreshold`. A slide differing by only a word or two moves few enough grid cells to fall under the default |

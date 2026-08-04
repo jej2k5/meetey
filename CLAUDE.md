@@ -36,15 +36,17 @@ User → /meetey (skill) → MCP server (Node.js) → meetey-capture (Swift CLI)
 
 **`meetey-capture/`** — Swift CLI using ScreenCaptureKit. Takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, stops on SIGTERM/SIGINT or after `--stop-after <seconds>` of wall-clock time. Also supports `--list-apps` (prints running supported apps as JSON), `--selftest` (exercises the keyframe pipeline with synthetic frames, no permission needed), and the `--video` flags below. Requires macOS 13+.
 
-**`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` by the installer. Eleven tools in two groups:
+**`mcp-server/index.js`** — Node.js MCP server. Manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` by the installer. Thirteen tools in two groups:
 
 | Capture | Admin |
 |---|---|
 | `list_apps` | `list_recordings` |
-| `start_recording` | `get_recording` |
-| `stop_recording` | `search_recordings` |
-| `transcribe` | `delete_recording` |
-| `get_keyframes` | `system_status` |
+| `list_displays` | `get_recording` |
+| `list_windows` | `search_recordings` |
+| `start_recording` | `delete_recording` |
+| `stop_recording` | `system_status` |
+| `transcribe` | |
+| `get_keyframes` | |
 | `get_status` | |
 
 **`mcp-server/library.js`** — The admin surface: reads the recordings directory and answers questions about it. Kept separate from `index.js` so it stays testable, and it never writes anything except through `deleteRecording`.
@@ -90,6 +92,10 @@ Off by default, opt-in **per recording**. There is deliberately no env var, conf
 Rather than recording video, the capture binary samples at `--fps` (default 1) and writes a JPEG only when the screen changes materially. Design notes:
 
 - **Scene detection is a 32×32 luma grid with a changed-cell count**, not a perceptual hash. dHash was tried first and fails on exactly the content that matters: downsampling a slide to 8×8 averages a headline change into nothing, so "Agenda" → "Budget" reads as an unchanged screen. `--scene-threshold` is the number of cells (out of 1024) that must move; `cellDelta` (24) is the per-cell luma delta that counts as movement.
+- **Keyframes are written when the screen *stops* moving, not when it starts.** A detected change becomes a pending candidate; it is persisted only once a later sample shows the screen has come to rest (a stricter threshold than the change one). A slide transition therefore yields one file instead of one per intermediate, and that file is the settled frame, which also OCRs far better than anything caught mid-fade. `--max-unsettled` (default 60s) force-captures a screen that never settles, so a video demo still yields roughly a frame a minute instead of nothing. A candidate still pending when the meeting ends is flushed by `finalize()` rather than lost.
+- **Cells that are always moving are masked out.** A rolling 15-sample window marks a cell volatile when it moved in ≥60% of samples; volatile cells don't count toward the threshold. This is what makes the standard slide-plus-speaker-tile layout produce one keyframe per slide instead of one per sample. Two details are load-bearing: **hysteresis** (a cell leaves the mask only below 30%, since cells straddling a moving region's edge otherwise flicker in and out and leak enough cells to clear the threshold on their own) and **one-cell dilation** (the grid averages ~40×22px per cell, so a tile's boundary lands mid-cell and moves less than its interior). `--no-volatility-mask` disables it. Note the interaction with the paragraph above: a full-screen video makes *every* cell volatile, so the mask alone would record nothing — the `--max-unsettled` valve is what prevents that, and it deliberately checks the *unmasked* delta.
+- **`--display` and `--window` narrow the source.** The default display is the one showing the target app, not `displays.first` — on a multi-monitor setup those are often different, and capturing the wrong one yields a session of irrelevant keyframes. `--window` scopes to a single window via `SCContentFilter(display:including:[window])`, excluding the app's other windows and its notification banners from both the frame and the change detector. `--list-displays` and `--list-windows` enumerate the choices. **ScreenCaptureKit has no concept of a tab** — window is the finest granularity the platform offers, and user-facing copy must not imply otherwise.
+- **`MEETEY_DEBUG_KEYFRAMES=1`** prints a per-sample decision trace (masked vs unmasked delta, settle delta, volatile cell count). Resolved once at startup — reading the environment per sample would put a dictionary build on the capture callback.
 - **Two queues.** Grid comparison runs on the capture callback; JPEG encoding and OCR run on a separate serial queue. Blocking the callback makes ScreenCaptureKit drop frames.
 - **Only `.complete` frames count.** SCKit delivers idle/blank/suspended frames; hashing those produces spurious keyframes on a static screen.
 - **`showsCursor = false`** — a moving cursor otherwise changes the grid and emits keyframes on an unchanged screen.
@@ -100,9 +106,11 @@ Artifacts land in `~/.meetey/recordings/<session>-frames/` with an `index.json` 
 
 ## Known Limitations
 
-ScreenCaptureKit captures at the **process level**, not the tab level. When targeting Chrome, all Chrome audio is captured — not just the meeting tab. Users should mute other tabs playing audio before starting a recording. With screen capture on, the same applies visually: other tabs, other windows of that app, and notification banners are all in frame.
+ScreenCaptureKit captures **audio** at the process level. When targeting Chrome, all Chrome audio is captured — not just the meeting tab. Users should mute other tabs playing audio before starting a recording.
 
-**Camera-heavy calls burn the frame budget.** A moving video tile changes the grid continuously, so keyframes fire every debounce interval (2s) until `--max-frames` is hit. Screen capture is for slides and screen shares; audio-only is the right choice for faces-only discussions.
+For **video**, `--window` narrows capture to a single window, which keeps the app's other windows and its notification banners out of frame. It cannot go finer: there is no tab-level capture on macOS, so whatever tab the captured window is showing is what gets captured, including after a tab switch. Isolating one tab means dragging it into its own window.
+
+**Camera-heavy calls no longer burn the frame budget.** A moving video tile is masked as volatile and a tile that never settles is never persisted, so the slide-plus-speaker-tile layout yields about one keyframe per slide. A call that is *only* faces still produces little of value — audio-only remains the right choice there — but it no longer exhausts `--max-frames` in the first few minutes and go dark for the rest of the meeting.
 
 ## Model
 

@@ -98,7 +98,53 @@ function listApps() {
   }
 }
 
-function startRecording({ bundleID, stopAfter, captureVideo = false, fps, maxFrames }) {
+function listDisplays() {
+  if (!existsSync(CAPTURE_BINARY)) {
+    return { error: `meetey-capture binary not found at ${CAPTURE_BINARY}. Run: npx jej2k5/meetey install` };
+  }
+  try {
+    const displays = JSON.parse(runCaptureBinary(["--list-displays"]).trim());
+    return { displays, message: displays.length === 1 ? "Only one display — no need to ask." : undefined };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function listWindows({ bundleID } = {}) {
+  if (!existsSync(CAPTURE_BINARY)) {
+    return { error: `meetey-capture binary not found at ${CAPTURE_BINARY}. Run: npx jej2k5/meetey install` };
+  }
+  try {
+    const args = ["--list-windows"];
+    if (bundleID) args.push("--app", bundleID);
+    const windows = JSON.parse(runCaptureBinary(args).trim());
+    if (windows.length === 0) {
+      return { windows: [], message: "No capturable windows found for that app." };
+    }
+    return {
+      windows,
+      // ScreenCaptureKit works at the window level and has no concept of a tab.
+      // Saying so here keeps the skill from implying a precision it cannot deliver.
+      message:
+        "Titles come from each window's active tab. A single Chrome tab cannot be " +
+        "captured on its own — to isolate a meeting, drag its tab into its own window " +
+        "and select that.",
+    };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function startRecording({
+  bundleID,
+  stopAfter,
+  captureVideo = false,
+  fps,
+  maxFrames,
+  sceneThreshold,
+  displayID,
+  windowID,
+}) {
   if (activeRecording) {
     return { error: "A recording is already active. Call stop_recording first." };
   }
@@ -118,6 +164,13 @@ function startRecording({ bundleID, stopAfter, captureVideo = false, fps, maxFra
     args.push("--video", "--frames-dir", framesDir);
     if (fps) args.push("--fps", String(fps));
     if (maxFrames) args.push("--max-frames", String(maxFrames));
+    if (sceneThreshold) args.push("--scene-threshold", String(sceneThreshold));
+    // Source narrowing only means something when there is a frame to narrow, and
+    // an audio-only recording keeps the filter the transcript path has always
+    // used. Passing these without captureVideo would put audio at risk for a
+    // capture that isn't happening.
+    if (displayID !== undefined) args.push("--display", String(displayID));
+    if (windowID !== undefined) args.push("--window", String(windowID));
   }
 
   const child = spawn(CAPTURE_BINARY, args, {
@@ -147,6 +200,8 @@ function startRecording({ bundleID, stopAfter, captureVideo = false, fps, maxFra
     bundleID,
     capturingVideo: captureVideo,
     framesDir,
+    displayID,
+    windowID,
     startedAt: activeRecording.startedAt,
     message: captureVideo
       ? "Recording started with screen capture. Call stop_recording when the meeting ends."
@@ -344,6 +399,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} },
     },
     {
+      name: "list_displays",
+      description:
+        "List attached displays. Only worth asking the user about when more than one is returned; " +
+        "otherwise start_recording picks the display showing the target app.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "list_windows",
+      description:
+        "List the capturable windows of a meeting app, with the title of each. Use this to let the " +
+        "user narrow screen capture to just the meeting window, which excludes the app's other " +
+        "windows and its notification banners. ScreenCaptureKit cannot capture an individual " +
+        "browser tab — window is the finest available granularity.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          bundleID: {
+            type: "string",
+            description: "Restrict to one app. Omit to list windows of all supported apps.",
+          },
+        },
+      },
+    },
+    {
       name: "start_recording",
       description: "Start capturing audio from a meeting app, and optionally screen keyframes.",
       inputSchema: {
@@ -374,6 +453,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "number",
             description: "Cap on keyframes per session when captureVideo is on (default 200).",
           },
+          sceneThreshold: {
+            type: "number",
+            description:
+              "Grid cells (of 1024) that must change before a screen counts as different " +
+              "(default 12). Raise it if a session produced too many near-identical keyframes.",
+          },
+          displayID: {
+            type: "number",
+            description:
+              "Display to capture, from list_displays. Ignored unless captureVideo is on. " +
+              "Defaults to the display showing the target app, so this is only needed to " +
+              "override that.",
+          },
+          windowID: {
+            type: "number",
+            description:
+              "Capture only this window of the app, from list_windows. Ignored unless " +
+              "captureVideo is on. Keeps the app's other windows and its notification " +
+              "banners out of frame entirely. Cannot select a browser tab — see list_windows.",
+          },
         },
       },
     },
@@ -400,8 +499,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: "get_keyframes",
       description:
         "Read the screen keyframes captured during a recording: file paths, millisecond " +
-        "offsets, and locally-recognized text (OCR) for each. Only available when the " +
-        "recording was started with captureVideo.",
+        "offsets, and locally-recognized text (OCR) for each. A frame may also carry " +
+        "revisitsMs — later offsets at which that same screen came back, recorded instead " +
+        "of storing a duplicate image. Only available when the recording was started " +
+        "with captureVideo.",
       inputSchema: {
         type: "object",
         properties: {
@@ -503,6 +604,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   let result;
   switch (name) {
     case "list_apps":      result = listApps(); break;
+    case "list_displays":  result = listDisplays(); break;
+    case "list_windows":   result = listWindows(args ?? {}); break;
     case "start_recording": result = startRecording(args); break;
     case "stop_recording":  result = stopRecording(); break;
     case "transcribe":      result = transcribe(args); break;
