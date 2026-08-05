@@ -294,7 +294,7 @@ local-only and not committed — so treat the four rules above as the record.
 
 **`docs/video-capture-plan.md`** — Design rationale for screen capture. Read before changing the keyframe pipeline.
 
-**`cli/`** — The `meetey` CLI (`bin` entry in `package.json`). `index.js` dispatches to `commands/install.js`, `commands/update.js`, and `commands/status.js`; `paths.js` holds every install path in one place. `install` checks the macOS version, installs whisper-cpp via Homebrew, downloads `ggml-base.en.bin`, builds and code-signs the Swift binary, installs the MCP server and skill, and adds Claude Code shortcuts.
+**`cli/`** — The `meetey` CLI (`bin` entry in `package.json`). **The `bin` entry does not put `meetey` on anyone's PATH**: install runs through `npx`, which executes from its own cache and links nothing. Every user-facing instruction must therefore say `npx jej2k5/meetey <cmd>`; a bare `meetey watch enable` is "command not found". The CLI's own help printed the bare form for two releases. `index.js` dispatches to `commands/install.js`, `commands/update.js`, and `commands/status.js`; `paths.js` holds every install path in one place. `install` checks the macOS version, installs whisper-cpp via Homebrew, downloads `ggml-base.en.bin`, builds and code-signs the Swift binary, installs the MCP server and skill, and adds Claude Code shortcuts.
 
 ## Packaging
 

@@ -62,7 +62,7 @@ export async function status() {
   const watchNote = watchEnabled
     ? "on — asks before recording"
     : watchInstalled
-      ? "off — enable: meetey watch enable"
+      ? "off — enable: npx jej2k5/meetey watch enable"
       : "off — run update to install it";
   console.log(`  \x1b[2m\u25cb\x1b[0m  meeting watcher (optional)  \x1b[2m(${watchNote})\x1b[0m`);
 

@@ -33,7 +33,7 @@ export function watch(sub) {
     case "log":     return logs();
     default:
       console.log(`
-Usage: meetey watch <enable|disable|status|log>
+Usage: npx jej2k5/meetey watch <enable|disable|status|log>
 
   enable    Watch for meetings and offer to record them
   disable   Stop watching
@@ -69,9 +69,9 @@ covers just the meeting window.
 
 It starts nothing without you choosing to.
 
-  meetey watch status    Check it
-  meetey watch log       See what it has noticed
-  meetey watch disable   Turn it off
+  npx jej2k5/meetey watch status    Check it
+  npx jej2k5/meetey watch log       See what it has noticed
+  npx jej2k5/meetey watch disable   Turn it off
 `);
 }
 

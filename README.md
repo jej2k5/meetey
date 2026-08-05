@@ -293,7 +293,7 @@ Meetey status
   ✔  binary code-signed
   ✔  whisper-cli  (/opt/homebrew/bin/whisper-cli)
   ✔  Whisper model (ggml-base.en.bin)  (~/.meetey/models/ggml-base.en.bin)
-  ○  meeting watcher (optional)  (off — enable: meetey watch enable)
+  ○  meeting watcher (optional)  (off — enable: npx jej2k5/meetey watch enable)
   ✔  MCP server files  (~/.meetey/mcp-server)
   ✔  MCP server registered in ~/.claude.json
   ✔  /meetey skill installed

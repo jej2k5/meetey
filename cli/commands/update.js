@@ -58,9 +58,9 @@ export async function update() {
   step("Installing the watch agent");
   if (existsSync(join(PKG_DIR, "daemon"))) {
     cpSync(join(PKG_DIR, "daemon"), DAEMON_DIR, { recursive: true, force: true });
-    green(`Watch agent installed to ${DAEMON_DIR} (off until: meetey watch enable)`);
+    green(`Watch agent installed to ${DAEMON_DIR} (off until: npx jej2k5/meetey watch enable)`);
   } else {
-    yellow("Watch agent not present in this package — skipping (meetey watch will be unavailable)");
+    yellow("Watch agent not present in this package — skipping (the watcher will be unavailable)");
   }
 
   // --- Re-register (command/paths may have changed) ---

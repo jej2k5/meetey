@@ -302,7 +302,8 @@ a silent or empty recording rather than an error, so it is the likeliest cause o
 "meetey recorded nothing" complaint.
 
 If asked about recording meetings automatically, describe what actually exists: an
-optional watcher (`meetey watch enable` in a terminal) that notices meetings in Chrome,
+optional watcher (`/meetey watch on`, or `npx jej2k5/meetey watch enable` in a terminal —
+there is no bare `meetey` command on PATH) that notices meetings in Chrome,
 Zoom, and Teams and **asks** before recording, offering audio only or audio + screen. It is off until enabled and
 never records on its own. Do not describe it as detecting when a meeting *ends* — a
 recording stops when the app quits or the captured window closes, not when a call wraps
