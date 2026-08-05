@@ -29,15 +29,16 @@ export function watch(sub) {
     case "enable":  return enable();
     case "disable": return disable();
     case "status":  return status();
-    case "logs":    return logs();
+    case "logs":
+    case "log":     return logs();
     default:
       console.log(`
-Usage: meetey watch <enable|disable|status|logs>
+Usage: meetey watch <enable|disable|status|log>
 
   enable    Watch for meetings and offer to record them
   disable   Stop watching
   status    Is the watcher running?
-  logs      Show recent watcher activity
+  log       Show recent watcher activity (alias: logs)
 
 The watcher never records on its own. When it notices a meeting it asks, naming
 the window, and records only if you say yes.
@@ -49,21 +50,27 @@ You can also drive this from Claude Code with /meetey watch.
 
 function enable() {
   step("Starting the watch agent");
+  yellow("Checking it can see your windows...");
   const result = enableWatch({ ...ctx, nodePath: process.execPath, captureBinary: BINARY_PATH });
+
   if (result.error) {
     red(result.error);
+    if (result.detail) console.log(`  ${result.detail}`);
+    if (result.fix) console.log(`\n  ${result.fix}\n`);
+    console.log("  (the watcher was not enabled)\n");
     process.exit(1);
   }
-  green("Watcher running");
+
+  green("Watcher running, and it can see your windows");
   console.log(`
 Meetey will now ask before recording when it notices a meeting in Chrome, Zoom,
-or Teams. It records audio only; screen capture still has to be requested per
-recording through /meetey start.
+or Teams. The prompt offers audio only or audio + screen, and screen capture
+covers just the meeting window.
 
-It starts nothing without you clicking Record.
+It starts nothing without you choosing to.
 
   meetey watch status    Check it
-  meetey watch logs      See what it has noticed
+  meetey watch log       See what it has noticed
   meetey watch disable   Turn it off
 `);
 }
@@ -80,7 +87,15 @@ function disable() {
 
 function status() {
   const state = watchStatus(ctx);
-  (state.enabled ? green : yellow)(state.message);
+  const healthy = state.enabled && state.canSeeWindows !== false;
+  (healthy ? green : yellow)(state.message);
+  if (state.enabled) {
+    const sight = state.canSeeWindows === null
+      ? "not reported yet"
+      : state.canSeeWindows ? "yes" : "NO — it will never notice a meeting";
+    console.log(`  can see windows: ${sight}`);
+    if (state.lastCheck) console.log(`  last checked:    ${state.lastCheck}`);
+  }
   console.log(`  plist: ${state.plistPath}`);
   console.log(`  log:   ${state.logPath}`);
 }

@@ -240,7 +240,7 @@ Three things worth being clear about:
 
 Recordings it makes are transcribed as soon as they end, so they're ready by the time you get to them. `/meetey list` shows them alongside everything else; `/meetey stop` works on one that's still running.
 
-If the watcher is on but never asks, check `/meetey watch log`. `could not list windows` means Node needs Screen Recording permission — separately from the capture binary — in System Settings → Privacy & Security.
+Enabling checks that it can actually see your windows before saying it worked, so if permission is missing you'll be told at that moment rather than discovering it after a missed meeting. `/meetey watch` reports the same thing any time.
 
 ## Managing your meetings
 
@@ -281,7 +281,7 @@ npx jej2k5/meetey status          # Show what's installed and whether everything
 npx jej2k5/meetey watch enable    # Watch for meetings and offer to record them
 npx jej2k5/meetey watch disable   # Stop watching
 npx jej2k5/meetey watch status    # Is the watcher running?
-npx jej2k5/meetey watch logs      # Recent watcher activity
+npx jej2k5/meetey watch log       # Recent watcher activity
 ```
 
 `status` output:
@@ -339,7 +339,7 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Recording stopped early | It ends when your call ends, the app quits, or the captured window closes. Rejoining in a new window won't resume it |
 | Recording didn't stop when the call ended | Only fires if the app took the microphone in the first place — joining by phone while sharing your screen leaves nothing to detect. It falls back to stopping when the app quits |
 | `/meetey stop` says no recording is active | If it already stopped itself, `/meetey stop` still collects it. If that fails, the WAV is in `~/.meetey/recordings/` |
-| Watcher never asks | `/meetey watch log`. `could not list windows` means Node needs Screen Recording permission, separately from the capture binary |
+| Watcher never asks | `/meetey watch` — if it says it can't see windows, Node needs Screen Recording permission, separately from the capture binary |
 | Watcher asks about things that aren't meetings | Expected — it errs toward asking. Say "Not now" and it drops that window |
 
 ## How it works

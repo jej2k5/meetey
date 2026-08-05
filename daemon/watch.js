@@ -35,10 +35,11 @@
  */
 
 import { spawn, execFileSync } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { readActive, writeActive, clearActive, writePending } from "../mcp-server/session-state.js";
+import { writeHealth } from "../mcp-server/watch-agent.js";
 
 const HOME = homedir();
 const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
@@ -69,9 +70,35 @@ const MEETING_PATTERNS = [
 ];
 
 const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
+const healthCtx = { meeteyDir: MEETEY_DIR, home: HOME };
 
-/** Windows currently declined, so the agent asks once and then stays quiet. */
-const declined = new Set();
+/**
+ * Windows already skipped, so the agent asks once and then stays quiet.
+ *
+ * Persisted because launchd restarts this process on crash, logout, and reboot,
+ * and an in-memory set means a meeting you already declined gets re-offered
+ * partway through.
+ */
+const DECLINED_PATH = join(MEETEY_DIR, "state", "watch-declined.json");
+
+function loadDeclined() {
+  try {
+    return new Set(JSON.parse(readFileSync(DECLINED_PATH, "utf8")));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDeclined() {
+  try {
+    mkdirSync(dirname(DECLINED_PATH), { recursive: true });
+    writeFileSync(DECLINED_PATH, JSON.stringify([...declined]) + "\n");
+  } catch {
+    // Losing this costs one redundant prompt, never a recording.
+  }
+}
+
+const declined = loadDeclined();
 /** True while a dialog is on screen — polling must not stack prompts. */
 let prompting = false;
 
@@ -83,12 +110,19 @@ function listWindows() {
       timeout: 15_000,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    return JSON.parse(out.trim());
+    const windows = JSON.parse(out.trim());
+    writeHealth(healthCtx, { at: new Date().toISOString(), canSeeWindows: true, windowCount: windows.length });
+    return windows;
   } catch (e) {
     // Screen Recording permission not granted yet, or the binary is mid-rebuild.
     // Either way this is a transient condition, not a reason to exit — launchd
     // would just restart us into the same state.
-    log(`could not list windows: ${e.message.split("\n")[0]}`);
+    //
+    // But it must not be silent: this is the failure that makes a freshly
+    // enabled watcher look like it simply never sees a meeting.
+    const detail = (e.stderr?.toString() || e.message || "").split("\n")[0];
+    writeHealth(healthCtx, { at: new Date().toISOString(), canSeeWindows: false, error: detail });
+    log(`could not list windows: ${detail}`);
     return [];
   }
 }
@@ -177,20 +211,23 @@ function transcribeInBackground(wavPath) {
     return;
   }
   log(`transcribing ${wavPath}`);
-  try {
-    // Produces <wav>.json, which the MCP server's `transcribe` reuses rather
-    // than re-running whisper. The expensive part is done before anyone asks.
-    execFileSync("whisper-cli", [
-      "-f", wavPath,
-      "-m", MODEL_PATH,
-      "-l", "en",
-      "--output-json",
-      "--no-prints",
-    ], { stdio: ["ignore", "ignore", "pipe"], timeout: 60 * 60 * 1000 });
-    log("transcription ready");
-  } catch (e) {
-    log(`transcription failed: ${e.message.split("\n")[0]}`);
-  }
+
+  // spawn, not execFileSync. Whisper on an hour of audio runs for minutes, and a
+  // synchronous call blocks Node's event loop for all of it — the poll never
+  // fires, so a meeting starting right after one ends is missed entirely. Two
+  // calls back to back is the ordinary case, not an edge case.
+  const child = spawn("whisper-cli", [
+    "-f", wavPath,
+    "-m", MODEL_PATH,
+    "-l", "en",
+    "--output-json",
+    "--no-prints",
+  ], { stdio: ["ignore", "ignore", "pipe"] });
+
+  child.on("exit", (code) => {
+    log(code === 0 ? "transcription ready" : `transcription failed (exit ${code})`);
+  });
+  child.on("error", (e) => log(`transcription failed: ${e.message.split("\n")[0]}`));
 }
 
 function startRecording(window, mode) {
@@ -275,17 +312,23 @@ function startRecording(window, mode) {
 async function tick() {
   if (prompting) return;
 
+  // Listed before the active-recording check so health keeps being reported
+  // during a recording — otherwise `enable` run mid-recording waits for a
+  // verdict that never comes.
+  const windows = listWindows();
+
   // Someone is already recording — this agent, or a /meetey start in an open
   // Claude Code session. Two captures of one meeting is worse than none.
   if (readActive(MEETEY_DIR)) return;
 
-  const windows = listWindows();
   const meeting = findMeeting(windows);
 
   // Forget declines for windows that are gone, so the next meeting in a reused
   // window asks again.
   const live = new Set(windows.map(keyFor));
-  for (const key of declined) if (!live.has(key)) declined.delete(key);
+  let pruned = false;
+  for (const key of declined) if (!live.has(key)) { declined.delete(key); pruned = true; }
+  if (pruned) saveDeclined();
 
   if (!meeting || declined.has(keyFor(meeting))) return;
 
@@ -296,6 +339,7 @@ async function tick() {
       startRecording(meeting, mode);
     } else {
       declined.add(keyFor(meeting));
+      saveDeclined();
       log(`skipped — ${meeting.title}`);
     }
   } finally {

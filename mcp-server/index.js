@@ -559,6 +559,27 @@ function getStatus() {
             : "Started by another Claude Code session. stop_recording will stop it from here.",
       };
     }
+    // A finished recording nobody has collected. The post-stop notification told
+    // the user to run /meetey stop; reporting "nothing active" here contradicts it.
+    const pending = readPending(MEETEY_DIR);
+    if (pending) {
+      return {
+        active: false,
+        pendingWriteUp: true,
+        sessionId: pending.sessionId,
+        outputPath: pending.outputPath,
+        framesDir: pending.framesDir,
+        startedAt: pending.startedAt,
+        stoppedAt: pending.stoppedAt,
+        startedBy: pending.startedBy,
+        windowTitle: pending.windowTitle,
+        autoStopReason: pending.autoStopReason,
+        message:
+          "A recording has finished and hasn't been written up yet. " +
+          "Run stop_recording to collect it.",
+      };
+    }
+
     if (finishedRecording) {
       return {
         active: false,
@@ -615,7 +636,10 @@ function adminDelete(args = {}) {
 }
 
 function adminStatus() {
-  return systemStatus({
+  // The watcher is the component most likely to be silently broken, so the
+  // command whose whole job is "is meetey working?" has to be able to see it.
+  const watcher = watchStatus(watchContext());
+  const base = systemStatus({
     recordingsDir: RECORDINGS_DIR,
     captureBinary: CAPTURE_BINARY,
     modelPath: MODEL_PATH,
@@ -630,6 +654,18 @@ function adminStatus() {
         }
       : null,
   });
+
+  return {
+    ...base,
+    watcher: {
+      enabled: watcher.enabled,
+      available: watcher.available,
+      canSeeWindows: watcher.canSeeWindows,
+      lastCheck: watcher.lastCheck,
+      logPath: watcher.logPath,
+      message: watcher.message,
+    },
+  };
 }
 
 // --- MCP server ---

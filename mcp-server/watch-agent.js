@@ -39,7 +39,56 @@ export function watchPaths({ meeteyDir, home }) {
     scriptPath: join(meeteyDir, "daemon", "watch.js"),
     logPath: join(meeteyDir, "logs", "watch.log"),
     logsDir: join(meeteyDir, "logs"),
+    healthPath: join(meeteyDir, "state", "watch-health.json"),
   };
+}
+
+/**
+ * What the agent can currently see.
+ *
+ * Written by the agent itself, every poll — and it has to be the agent, not a
+ * check run from the CLI. Screen Recording permission is granted per responsible
+ * process: a `--list-windows` run from a terminal is attributed to the terminal,
+ * while the same binary run from a LaunchAgent is attributed to the agent's node.
+ * They differ, so a check performed by the installer can pass while the thing it
+ * just installed is blind.
+ */
+export function writeHealth({ meeteyDir, home }, health) {
+  const { healthPath } = watchPaths({ meeteyDir, home });
+  try {
+    mkdirSync(dirname(healthPath), { recursive: true });
+    writeFileSync(healthPath, JSON.stringify(health, null, 2) + "\n");
+  } catch {
+    // Health reporting must never take the agent down.
+  }
+}
+
+export function readHealth({ meeteyDir, home }) {
+  const { healthPath } = watchPaths({ meeteyDir, home });
+  if (!existsSync(healthPath)) return null;
+  try {
+    return JSON.parse(readFileSync(healthPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function clearHealth({ meeteyDir, home }) {
+  const { healthPath } = watchPaths({ meeteyDir, home });
+  try {
+    unlinkSync(healthPath);
+  } catch {
+    // Already gone.
+  }
+}
+
+/** Blocking sleep-poll, matching the technique the MCP server already uses. */
+function waitFor(ms, done) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline && !done()) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  return done();
 }
 
 const escapeXml = (s) =>
@@ -61,6 +110,8 @@ function plistBody({ nodePath, scriptPath, logPath }) {
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <!-- Without this a crash-looping agent restarts every 10s and fills the log. -->
+  <key>ThrottleInterval</key><integer>30</integer>
   <key>ProcessType</key><string>Background</string>
   <key>StandardOutPath</key><string>${escapeXml(logPath)}</string>
   <key>StandardErrorPath</key><string>${escapeXml(logPath)}</string>
@@ -92,21 +143,42 @@ export function watchStatus({ meeteyDir, home }) {
   const running = isLoaded();
   const available = existsSync(paths.scriptPath);
 
+  const health = readHealth({ meeteyDir, home });
+
   return {
     enabled: installed && running,
     available,
     plistInstalled: installed,
     agentRunning: running,
+    // "Loaded" is what launchctl knows. Whether it can see anything is a
+    // different question, and the one that actually goes wrong.
+    canSeeWindows: health?.canSeeWindows ?? null,
+    lastCheck: health?.at ?? null,
     plistPath: paths.plistPath,
     logPath: paths.logPath,
-    message: !available
-      ? "The watch agent is not installed. Run: npx jej2k5/meetey update"
-      : installed && running
-        ? "The watcher is running. It asks before recording anything."
-        : installed
-          ? "The watcher is installed but not running — enable it again to restart it."
-          : "The watcher is off.",
+    message: watchMessage({
+      available,
+      installed,
+      running,
+      canSeeWindows: health?.canSeeWindows ?? null,
+    }),
   };
+}
+
+/**
+ * The one-line verdict. Pure, so every combination can be exercised — including
+ * running-but-blind, which is the state that matters most and the one hardest to
+ * reproduce, since it needs a real LaunchAgent and a revoked permission.
+ */
+export function watchMessage({ available, installed, running, canSeeWindows }) {
+  if (!available) return "The watch agent is not installed. Run: npx jej2k5/meetey update";
+  if (installed && running && canSeeWindows === false) {
+    return "The watcher is running but cannot see any windows — it will never notice a meeting. " +
+      "Node needs Screen Recording permission in System Settings → Privacy & Security.";
+  }
+  if (installed && running) return "The watcher is running. It asks before recording anything.";
+  if (installed) return "The watcher is installed but not running — enable it again to restart it.";
+  return "The watcher is off.";
 }
 
 export function enableWatch({ meeteyDir, home, nodePath, captureBinary }) {
@@ -120,6 +192,8 @@ export function enableWatch({ meeteyDir, home, nodePath, captureBinary }) {
   }
 
   try {
+    // Stale health from a previous run would be mistaken for this one's verdict.
+    clearHealth({ meeteyDir, home });
     mkdirSync(paths.logsDir, { recursive: true });
     mkdirSync(dirname(paths.plistPath), { recursive: true });
     writeFileSync(paths.plistPath, plistBody({
@@ -135,13 +209,39 @@ export function enableWatch({ meeteyDir, home, nodePath, captureBinary }) {
     return { error: `Could not start the watcher: ${e.message.split("\n")[0]}` };
   }
 
+  // Wait for the agent to report what it can actually see. Declaring success
+  // without this is how a watcher ends up installed, running, and permanently
+  // blind — the failure logs one line every ten seconds and shows the user
+  // nothing at all.
+  const reported = waitFor(25_000, () => readHealth({ meeteyDir, home }) !== null);
+  const health = readHealth({ meeteyDir, home });
+
+  if (!reported || !health?.canSeeWindows) {
+    // Leave nothing behind that looks enabled but cannot work.
+    bootout();
+    try { unlinkSync(paths.plistPath); } catch { /* nothing to remove */ }
+
+    return {
+      error: !reported
+        ? "The watcher started but never reported in. Check the log: " + paths.logPath
+        : "The watcher cannot see any windows, so it would never notice a meeting.",
+      permissionNeeded: !reported ? undefined : true,
+      detail: health?.error ?? undefined,
+      fix:
+        "Node needs Screen Recording permission, separately from meetey-capture. " +
+        "System Settings → Privacy & Security → Screen Recording → enable node, " +
+        "then run this again.",
+      enabled: false,
+    };
+  }
+
   return {
     enabled: true,
     plistPath: paths.plistPath,
     logPath: paths.logPath,
     message:
-      "The watcher is on. It will ask before recording when it notices a meeting in " +
-      "Chrome, Zoom, or Teams. Audio only — screen capture is still requested per recording.",
+      "The watcher is on and can see your windows. It will ask before recording when it " +
+      "notices a meeting in Chrome, Zoom, or Teams, offering audio only or audio + screen.",
   };
 }
 

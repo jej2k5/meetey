@@ -93,6 +93,22 @@ mid-call must not turn an absent-minded Return into a recording. Having a defaul
 at all matters for keyboard users: with none, no button holds focus, which can
 leave the affirmative choices mouse-only when Full Keyboard Access is off.
 
+`enable_watcher` **verifies before reporting success**: it bootstraps the agent, waits
+for the agent to report what it can see, and tears the install back down if it is blind.
+The check has to come from the agent, not the installer — Screen Recording permission is
+granted per *responsible process*, so `--list-windows` from a terminal is attributed to
+the terminal while the same binary under launchd is attributed to the agent's node. A
+check performed by the CLI can pass while the thing it just installed cannot see
+anything. Without this, enabling prints a confident success message and the watcher then
+logs one line every ten seconds into a file nobody was told to open.
+`state/watch-health.json` carries the verdict, and `watchMessage` is pure so all six
+states — including running-but-blind, which needs a real LaunchAgent and a revoked
+permission to reproduce — are covered by tests.
+
+Transcription uses `spawn`, not `execFileSync`. A synchronous whisper run blocks Node's
+event loop for minutes, during which the poll never fires and a meeting starting right
+after one ends is missed. Back-to-back calls are ordinary, not an edge case.
+
 `parseDialogChoice` compares button titles exactly rather than by regex — the `+`
 in `Audio + screen` is a metacharacter, and a pattern that silently failed to match
 would start an audio-only recording for someone who asked for their screen.

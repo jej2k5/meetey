@@ -160,7 +160,7 @@ Full transcript: [`<notes-stem>-transcript.md`] · [N] words · [model]
 
 Call `get_status` and report:
 - If active: "Recording in progress since [startedAt] — session [sessionId]." Add "Capturing screen content." when `capturingVideo` is true.
-- If `autoStopped` is true: "The recording stopped on its own — [autoStopReason] — and hasn't been transcribed yet. Run `/meetey stop` to write it up." Say this rather than "no recording active"; the audio is sitting there unprocessed and the user almost certainly wants it.
+- If `pendingWriteUp` or `autoStopped` is true: a recording has finished and is waiting. Say so — naming `windowTitle` when there is one, and `autoStopReason` when it explains why it ended — and offer to run `/meetey stop` now. Never report "no recording active" in this state; the audio is sitting there and the user almost certainly wants it.
 - If `startedBy` is `watch`, the meeting watcher started it after the user confirmed — say "Recording [windowTitle], started by the meeting watcher." `/meetey stop` works on it normally.
 - If inactive: "No recording active."
 
@@ -261,15 +261,20 @@ recording on its own, and the prompt lets the user pick audio only or audio + sc
 
 - `/meetey watch` with no argument → `watcher_status`. Report whether it is on, in one
   line. If it is on, mention that it asks before recording; the user should not have to
-  wonder whether something is being captured silently.
-- `/meetey watch on` → `enable_watcher`. Say what it will now do, and that `/meetey watch off`
-  reverses it.
+  wonder whether something is being captured silently. If `canSeeWindows` is `false`,
+  lead with that — the watcher is running and will never notice a meeting until node is
+  granted Screen Recording permission.
+- `/meetey watch on` → `enable_watcher`. It verifies the agent can actually see windows
+  before reporting success, so a `permissionNeeded` error is the expected first-run
+  outcome rather than a failure to work around — relay its `fix` verbatim and don't
+  retry. On success, say what it will now do and that `/meetey watch off` reverses it.
 - `/meetey watch off` → `disable_watcher`. Add that a recording already in progress keeps
   running — turning the watcher off is not stopping a capture, and someone doing this
   mid-meeting will assume otherwise.
 - `/meetey watch log` → `watcher_log`. Use this when the watcher is on but never seems to
-  ask: the log distinguishes "noticed nothing" from "could not list windows", and the
-  second means node is missing Screen Recording permission.
+  ask. Check `watcher_status`'s `canSeeWindows` first, though — `false` means node is
+  missing Screen Recording permission and the watcher will never notice anything, which
+  the log only hints at.
 
 **Only enable it when asked.** It installs a login agent that persists across restarts,
 so it is not something to switch on helpfully because a user just missed a recording —
