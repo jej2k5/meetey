@@ -300,6 +300,20 @@ Meetey status
   ✔  Claude Code shortcuts  (Ctrl+Shift+R / Ctrl+Shift+S, while Claude Code is focused)
 ```
 
+### Staying current
+
+`npx jej2k5/meetey status` tells you whether a newer version has been released:
+
+```
+  installed: 1.4.1
+  update available: 1.4.1 → 1.5.0
+    npx jej2k5/meetey update
+```
+
+This is the only part of Meetey that contacts a server. It's an anonymous request for the repository's latest release tag — nothing about you or your machine is sent, and the answer is a version string. The result is cached for a day, times out after two seconds, and is skipped silently if you're offline. `MEETEY_NO_UPDATE_CHECK=1` turns it off entirely.
+
+`/meetey doctor` reports the same thing, but never makes the request itself — it only reads what the CLI last found.
+
 ## Requirements
 
 - macOS 13 (Ventura) or later

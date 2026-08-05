@@ -29,6 +29,7 @@ import {
   readActive, writeActive, clearActive, readPending, writePending, clearPending,
 } from "./session-state.js";
 import { watchStatus, enableWatch, disableWatch, watchLog } from "./watch-agent.js";
+import { readUpdateCache, compareVersions } from "./update-check.js";
 
 // --- Config ---
 
@@ -36,6 +37,11 @@ const HOME = homedir();
 const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
 const RECORDINGS_DIR = process.env.MEETEY_OUTPUT_DIR ?? join(MEETEY_DIR, "recordings");
 const MODEL_PATH = process.env.MEETEY_MODEL ?? join(MEETEY_DIR, "models", "ggml-base.en.bin");
+
+// Reported as this server's identity to Claude Code, and compared against the
+// latest release. One constant so the two can never disagree — keep it in step
+// with package.json and mcp-server/package.json when bumping.
+const SERVER_VERSION = "1.4.1";
 
 const scriptDir = new URL(".", import.meta.url).pathname;
 const CAPTURE_BINARY = process.env.MEETEY_BINARY ??
@@ -655,8 +661,25 @@ function adminStatus() {
       : null,
   });
 
+  // Cache only — never a network call. The CLI performs the lookup; a tool
+  // running inside an editor should not reach out on its own.
+  const cached = readUpdateCache(MEETEY_DIR);
+  const installed = SERVER_VERSION;
+  const update = cached?.latest
+    ? {
+        installed,
+        latest: cached.latest,
+        updateAvailable: compareVersions(cached.latest, installed) > 0,
+        checkedAt: cached.checkedAt,
+        hint: compareVersions(cached.latest, installed) > 0
+          ? `Meetey ${cached.latest} is available — run: npx jej2k5/meetey update`
+          : undefined,
+      }
+    : { installed, latest: null, updateAvailable: false, note: "Run `npx jej2k5/meetey status` to check for updates." };
+
   return {
     ...base,
+    version: update,
     watcher: {
       enabled: watcher.enabled,
       available: watcher.available,
@@ -671,7 +694,7 @@ function adminStatus() {
 // --- MCP server ---
 
 const server = new Server(
-  { name: "meetey", version: "1.4.1" },
+  { name: "meetey", version: SERVER_VERSION },
   { capabilities: { tools: {} } }
 );
 

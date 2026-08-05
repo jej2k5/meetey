@@ -295,6 +295,7 @@ Call `system_status` and report the install's health.
   checks in a single summary line underneath. A user runs this because something is
   broken; the working parts are not the answer.
 - Map failures to the Troubleshooting table below rather than inventing new advice.
+- `version.updateAvailable` means a newer Meetey has been released — mention it once with the upgrade command, after the health report. Don't lead with it; a pending update is not a fault. The figure comes from a cache the CLI populates, so `checkedAt` may be up to a day old and `latest: null` just means nothing has checked yet.
 
 Missing Screen Recording permission is the one worth calling out specifically: it produces
 a silent or empty recording rather than an error, so it is the likeliest cause of a

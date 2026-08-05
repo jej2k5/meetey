@@ -48,7 +48,7 @@ switch (command) {
   }
   case "status": {
     const { status } = await import("./commands/status.js");
-    status();
+    await status();
     break;
   }
   case "watch": {

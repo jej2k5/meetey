@@ -19,8 +19,9 @@ import { existsSync, readFileSync } from "fs";
 import { green, yellow, red } from "../utils.js";
 import {
   BINARY_PATH, MODEL_PATH, SERVER_DIR, SKILL_PATH, CLAUDE_JSON, KEYBINDINGS,
-  WATCH_PLIST, WATCH_SCRIPT,
+  WATCH_PLIST, WATCH_SCRIPT, MEETEY_DIR, PKG_DIR,
 } from "../paths.js";
+import { checkForUpdate, isDisabled } from "../../mcp-server/update-check.js";
 
 function check(label, ok, detail = "") {
   const icon = ok ? "\x1b[32m✔\x1b[0m" : "\x1b[31m✘\x1b[0m";
@@ -28,7 +29,7 @@ function check(label, ok, detail = "") {
   return ok;
 }
 
-export function status() {
+export async function status() {
   console.log("\n\x1b[1mMeetey status\x1b[0m\n");
 
   // Binary
@@ -92,6 +93,50 @@ export function status() {
     } catch {}
   }
   check("Claude Code shortcuts", hotkeysOk, hotkeysOk ? "Ctrl+Shift+R / Ctrl+Shift+S, while Claude Code is focused" : "run: npx jej2k5/meetey install");
+
+  await reportVersion();
+}
+
+function readVersion(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function reportVersion() {
+  const installed = readVersion(`${SERVER_DIR}/package.json`);
+  const running = readVersion(`${PKG_DIR}/package.json`);
+  if (!installed) return;
+
+  console.log("");
+  console.log(`  installed: ${installed}`);
+
+  // Free, and catches an update that was started and did not finish — the CLI
+  // you are running is newer than what it put on disk.
+  if (running && installed !== running) {
+    yellow(`  this package is ${running} — run: npx jej2k5/meetey update`);
+    return;
+  }
+
+  if (isDisabled()) {
+    console.log("  update check disabled (MEETEY_NO_UPDATE_CHECK=1)");
+    return;
+  }
+
+  const update = await checkForUpdate({ meeteyDir: MEETEY_DIR, currentVersion: installed });
+  if (!update) return;
+
+  if (update.updateAvailable) {
+    yellow(`  update available: ${installed} → ${update.latest}`);
+    console.log("    npx jej2k5/meetey update");
+  } else if (update.error) {
+    // Not a failure worth shouting about; the check is a convenience.
+    console.log(`  couldn't check for updates (${update.error})`);
+  } else {
+    green("  up to date");
+  }
 
   console.log();
 }

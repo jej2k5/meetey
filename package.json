@@ -22,6 +22,7 @@
     "mcp-server/library.js",
     "mcp-server/session-state.js",
     "mcp-server/watch-agent.js",
+    "mcp-server/update-check.js",
     "mcp-server/package.json",
     "daemon/",
     "meetey-capture/Sources",
