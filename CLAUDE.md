@@ -370,6 +370,23 @@ node mcp-server/index.js   # must answer tools/list
 node daemon/watch.js --selftest
 ```
 
+## The shareable-content query has a deadline
+
+`SCShareableContent.current` does **not** reliably throw when Screen Recording
+permission is unresolved — it can simply never return. Every entry point goes
+through `shareableContent(timeout:)` instead, which races it against a 15s sleep.
+
+This is not hypothetical. A watch-agent recording sat for 35 minutes having never
+opened its stream: no output, no exit, holding the active-recording lock, and
+indistinguishable in the log from a healthy recording. Nothing was captured. The
+frames directory is created *after* this call and did not exist, which is what
+located it — every other failure path in setup prints and exits.
+
+The likeliest trigger is an update: the binary is rebuilt and re-signed, macOS
+treats it as new, and a background agent has no good way to surface the permission
+prompt. `record()` also announces each setup step now, because setup runs before
+anything is written to disk and a stall there otherwise looks like success.
+
 ## Supported App Bundle IDs
 
 | App | Bundle ID |

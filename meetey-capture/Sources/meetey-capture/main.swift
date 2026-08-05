@@ -1723,10 +1723,44 @@ func selfTest() throws {
 
 // MARK: - Main
 
+enum CaptureError: Error, LocalizedError {
+    case shareableContentTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .shareableContentTimedOut:
+            return "Timed out asking macOS what is on screen. This usually means Screen Recording "
+                 + "permission has not been granted to this binary — after an update it is re-signed "
+                 + "and macOS treats it as new. Grant it in System Settings > Privacy & Security > "
+                 + "Screen Recording."
+        }
+    }
+}
+
+/// `SCShareableContent.current` with a deadline.
+///
+/// It does not reliably throw when Screen Recording permission is unresolved — it
+/// can simply never return. A capture launched by the watch agent then sits
+/// forever: no output, no exit, holding the active-recording lock, looking
+/// identical in the log to a healthy recording. That is exactly how a 35-minute
+/// meeting was silently not recorded.
+func shareableContent(timeout: TimeInterval = 15) async throws -> SCShareableContent {
+    try await withThrowingTaskGroup(of: SCShareableContent.self) { group in
+        group.addTask { try await SCShareableContent.current }
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            throw CaptureError.shareableContentTimedOut
+        }
+        guard let first = try await group.next() else { throw CaptureError.shareableContentTimedOut }
+        group.cancelAll()
+        return first
+    }
+}
+
 let supportedBundleIDs = ["com.google.Chrome", "us.zoom.xos", "com.microsoft.teams"]
 
 func listApps() async throws {
-    let content = try await SCShareableContent.current
+    let content = try await shareableContent()
     let found = content.applications.filter { supportedBundleIDs.contains($0.bundleIdentifier) }
     if found.isEmpty {
         print("[]")
@@ -1745,7 +1779,7 @@ struct DisplayRecord: Codable {
 }
 
 func listDisplays() async throws {
-    let content = try await SCShareableContent.current
+    let content = try await shareableContent()
     let main = CGMainDisplayID()
     let displays = content.displays.map { display -> DisplayRecord in
         let mode = CGDisplayCopyDisplayMode(display.displayID)
@@ -1775,7 +1809,7 @@ struct WindowRecord: Codable {
 /// ScreenCaptureKit has no concept of a tab, so picking the window holding the
 /// meeting is as close as the platform gets.
 func listWindows(bundleID: String) async throws {
-    let content = try await SCShareableContent.current
+    let content = try await shareableContent()
     let wanted = bundleID.isEmpty ? supportedBundleIDs : [bundleID]
     let windows = content.windows
         .filter { window in
@@ -1817,7 +1851,11 @@ func displayContaining(_ window: SCWindow, in content: SCShareableContent) -> SC
 }
 
 func record(args: Args) async throws {
-    let content = try await SCShareableContent.current
+    // Setup runs before anything is written to disk, so without these a stall
+    // here is indistinguishable from a recording that is working.
+    fputs("meetey-capture: resolving what is on screen\n", stderr)
+    let content = try await shareableContent()
+    fputs("meetey-capture: preparing capture\n", stderr)
 
     guard let app = content.applications.first(where: { $0.bundleIdentifier == args.bundleID }) else {
         fputs("meetey-capture: app not found: \(args.bundleID)\n", stderr)
@@ -2070,7 +2108,7 @@ func record(args: Args) async throws {
                     // A failed query means we don't know, not that the window is
                     // gone. Treating a transient error as "ended" would cut a
                     // live meeting short.
-                    guard let content = try? await SCShareableContent.current else { continue }
+                    guard let content = try? await shareableContent() else { continue }
                     windowPresent = content.windows.contains { $0.windowID == id }
                 }
 
