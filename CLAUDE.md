@@ -149,6 +149,16 @@ This shipped broken: the red indicator stopped appearing entirely. Fade first,
 release the slot on completion; on the way back, take the slot before fading in or
 there is nothing to fade.
 
+**Stopping the watcher stops everything it started.** `launchctl bootout` tears down
+the whole job, and the capture process is in that process group, so it dies too —
+mid-write, with no pending record and nothing queued to transcribe. The SIGTERM
+handler therefore ends a running capture *cleanly* and waits for it to finalize its
+WAV before exiting, bounded at 15s because launchd escalates to SIGKILL on its own
+schedule. The audio is the irreplaceable thing; everything else can be redone.
+
+For the same reason, "any recording already in progress keeps running" was wrong
+and is gone from the copy.
+
 It exits when `getppid()` becomes 1. A clean stop signals it, but a crash does not,
 and launchd then restarts the agent and starts a *second* indicator — two icons
 claiming the same thing, one of them lying.

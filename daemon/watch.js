@@ -101,6 +101,8 @@ function saveDeclined() {
 const declined = loadDeclined();
 /** True while a dialog is on screen — polling must not stack prompts. */
 let prompting = false;
+/** The capture this agent started, if any. Held so shutdown can end it properly. */
+let activeCapture = null;
 
 function listWindows() {
   if (!existsSync(CAPTURE_BINARY)) return [];
@@ -259,6 +261,7 @@ function startRecording(window, mode) {
   }
 
   const child = spawn(CAPTURE_BINARY, args, { stdio: ["ignore", "ignore", "pipe"] });
+  activeCapture = child;
 
   let autoStopReason = null;
   child.stderr.on("data", (d) => {
@@ -285,6 +288,7 @@ function startRecording(window, mode) {
   log(`recording ${sessionId} (${mode === "screen" ? "audio + screen" : "audio"}) — ${window.title}`);
 
   child.on("exit", () => {
+    activeCapture = null;
     clearActive(MEETEY_DIR);
     log(`recording ${sessionId} ended`);
     if (!existsSync(outputPath)) return;
@@ -443,6 +447,29 @@ const indicator = startIndicator();
   log("meetey watch stopping");
   // The indicator means "the watcher is running", so it must not outlive it.
   try { indicator?.kill("SIGTERM"); } catch { /* already gone */ }
+
+  // A recording in flight has to be ended properly, not abandoned.
+  //
+  // `launchctl bootout` tears down the whole job, and the capture process is in
+  // this process group, so it dies with us — mid-write, with no pending record
+  // and nothing queued to transcribe. The audio is the one irreplaceable thing
+  // here, so shutdown waits for the capture to finalize its WAV before exiting.
+  if (activeCapture) {
+    log("stopping the recording in progress before exiting");
+    try { activeCapture.kill("SIGTERM"); } catch { /* already gone */ }
+    activeCapture.once("exit", () => {
+      log("recording finalized; exiting");
+      process.exit(0);
+    });
+    // launchd escalates to SIGKILL after its own grace period; leaving early
+    // would defeat the point, but hanging forever would too.
+    setTimeout(() => {
+      log("capture did not exit in time; exiting anyway");
+      process.exit(0);
+    }, 15_000);
+    return;
+  }
+
   process.exit(0);
 });
   setInterval(() => { tick().catch((e) => log(`tick failed: ${e.message}`)); }, POLL_MS);

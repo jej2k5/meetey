@@ -296,7 +296,7 @@ export function disableWatch({ meeteyDir, home }) {
     enabled: false,
     // Stopping the watcher is not stopping a recording. Conflating the two would
     // have someone turn this off mid-meeting and assume their capture ended.
-    message: "The watcher is off. Any recording already in progress keeps running.",
+    message: "The watcher is off. A recording in progress is stopped and saved first — stopping the watcher tears down everything it started, so it is finished properly rather than abandoned.",
   };
 }
 

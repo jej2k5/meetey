@@ -268,9 +268,10 @@ recording on its own, and the prompt lets the user pick audio only or audio + sc
   before reporting success, so a `permissionNeeded` error is the expected first-run
   outcome rather than a failure to work around — relay its `fix` verbatim and don't
   retry. On success, say what it will now do and that `/meetey watch off` reverses it.
-- `/meetey watch off` → `disable_watcher`. Add that a recording already in progress keeps
-  running — turning the watcher off is not stopping a capture, and someone doing this
-  mid-meeting will assume otherwise.
+- `/meetey watch off` → `disable_watcher`. If a recording is in progress, say plainly that
+  it will be stopped and saved: stopping the watcher tears down everything it started, so
+  the recording ends too. It is finalised rather than lost, but someone doing this
+  mid-meeting needs to know their recording is ending.
 - `/meetey watch log` → `watcher_log`. Use this when the watcher is on but never seems to
   ask. Check `watcher_status`'s `canSeeWindows` first, though — `false` means node is
   missing Screen Recording permission and the watcher will never notice anything, which
