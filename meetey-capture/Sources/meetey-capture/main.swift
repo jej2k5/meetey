@@ -48,6 +48,9 @@ struct Args {
     let callEndGrace: TimeInterval
     let menuBar: Bool
     let label: String
+    let watchIndicator: Bool
+    let stateFile: String
+    let plistPath: String
 
     static func parse() -> Args {
         var bundleID = ""
@@ -73,6 +76,9 @@ struct Args {
         var callEndGrace: TimeInterval = 600
         var menuBar = false
         var label = ""
+        var watchIndicator = false
+        var stateFile = ""
+        var plistPath = ""
         let args = CommandLine.arguments.dropFirst()
         var it = args.makeIterator()
         while let arg = it.next() {
@@ -100,6 +106,9 @@ struct Args {
             case "--call-end-grace":  callEndGrace = TimeInterval(it.next() ?? "") ?? 600
             case "--menu-bar":        menuBar = true
             case "--label":           label = it.next() ?? ""
+            case "--watch-indicator": watchIndicator = true
+            case "--state-file":      stateFile = it.next() ?? ""
+            case "--plist":           plistPath = it.next() ?? ""
             default: break
             }
         }
@@ -111,7 +120,8 @@ struct Args {
                     maxFrames: maxFrames, maxUnsettled: maxUnsettled,
                     volatilityMask: volatilityMask, autoStop: autoStop,
                     autoStopGrace: autoStopGrace, stopWhenCallEnds: stopWhenCallEnds,
-                    callEndGrace: callEndGrace, menuBar: menuBar, label: label)
+                    callEndGrace: callEndGrace, menuBar: menuBar, label: label,
+                    watchIndicator: watchIndicator, stateFile: stateFile, plistPath: plistPath)
     }
 }
 
@@ -935,6 +945,138 @@ func postNotification(title: String, subtitle: String, body: String) {
     process.arguments = ["-e", script]
     try? process.run()
     process.waitUntilExit()
+}
+
+// MARK: - Watcher indicator
+
+/// The menu bar presence of the watch agent, for as long as it is running.
+///
+/// Deliberately the quiet counterpart to `RecordingIndicator`: a monochrome
+/// dotted outline against that one's solid red. Watching and recording are
+/// different things to be told, and the difference has to be legible at a glance
+/// — if this competed with the recording dot it would weaken the only
+/// continuously-visible signal that a recording is happening.
+///
+/// **It is still while idle.** Motion happens at the seams — settling in when the
+/// agent starts, standing aside when a recording begins, returning when it ends.
+/// A menu bar icon that moves for hours is the animation-fatigue failure; there
+/// is nothing to communicate between state changes, so nothing moves.
+@MainActor
+final class WatcherIndicator: NSObject {
+    private let item: NSStatusItem
+    private let plistPath: String?
+    private let statusLine = NSMenuItem()
+    private var recordingActive = false
+    private var poll: Timer?
+
+    /// Entrance timing. Exits run at 75% — leaving should be quicker than arriving.
+    private static let enterDuration: TimeInterval = 0.5
+    private static let exitDuration: TimeInterval = 0.375
+    /// Natural deceleration; no bounce, which would draw attention to the motion
+    /// rather than to what changed.
+    private static let easeOutQuart = CAMediaTimingFunction(controlPoints: 0.25, 1, 0.5, 1)
+
+    /// macOS's own reduce-motion switch. Not optional to honour: someone who has
+    /// asked the system to stop animating things has asked us too.
+    private static var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    init?(stateFile: String, plistPath: String?) {
+        guard !NSScreen.screens.isEmpty else { return nil }
+        self.plistPath = plistPath
+        self.item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        super.init()
+
+        item.button?.image = NSImage(systemSymbolName: "circle.dotted",
+                                     accessibilityDescription: "Meetey is watching for meetings")
+        item.button?.setAccessibilityLabel("Meetey is watching for meetings")
+
+        let menu = NSMenu()
+        statusLine.title = "Watching for meetings"
+        statusLine.isEnabled = false
+        menu.addItem(statusLine)
+        menu.addItem(.separator())
+        let stop = NSMenuItem(title: "Stop Watching", action: #selector(stopWatching), keyEquivalent: "")
+        stop.target = self
+        menu.addItem(stop)
+        item.menu = menu
+
+        settleIn()
+        // Cheap: reading one small file. The alternative, watching the file, adds
+        // failure modes for a two-second delay nobody perceives.
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.exitIfOrphaned()
+                self?.syncWithRecordingState(stateFile: stateFile)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        poll = timer
+    }
+
+    /// The indicator says "the watcher is running", so it must not outlive it.
+    ///
+    /// A clean stop signals us, but a crash or SIGKILL does not — and launchd
+    /// then restarts the agent, which starts a second indicator. Two icons
+    /// claiming the same thing, one of them lying. Reparenting to pid 1 is the
+    /// signal that the parent is gone.
+    private func exitIfOrphaned() {
+        guard getppid() == 1 else { return }
+        NSStatusBar.system.removeStatusItem(item)
+        exit(0)
+    }
+
+    /// Arriving: fade up rather than appearing abruptly in a bar the user is
+    /// probably already looking at.
+    private func settleIn() {
+        guard let button = item.button else { return }
+        guard !Self.reduceMotion else { button.alphaValue = 1; return }
+        button.alphaValue = 0
+        animate(button, to: 1, duration: Self.enterDuration)
+    }
+
+    private func animate(_ button: NSStatusBarButton, to alpha: CGFloat, duration: TimeInterval) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = Self.easeOutQuart
+            button.animator().alphaValue = alpha
+        }
+    }
+
+    /// A recording has its own, louder indicator. Two dots in the menu bar saying
+    /// overlapping things is worse than one saying the important thing, so this
+    /// steps aside for the duration and comes back afterwards.
+    private func syncWithRecordingState(stateFile: String) {
+        let active = FileManager.default.fileExists(atPath: stateFile)
+        guard active != recordingActive else { return }
+        recordingActive = active
+        statusLine.title = active ? "Recording — see the red indicator" : "Watching for meetings"
+
+        guard let button = item.button else { return }
+        guard !Self.reduceMotion else { button.alphaValue = active ? 0 : 1; return }
+        animate(button, to: active ? 0 : 1,
+                duration: active ? Self.exitDuration : Self.enterDuration)
+    }
+
+    @objc private func stopWatching() {
+        // Same two steps as `disableWatch`: unload the agent, then remove the
+        // plist so it does not return at next login.
+        let uid = String(getuid())
+        run("/bin/launchctl", ["bootout", "gui/\(uid)/com.meetey.watch"])
+        if let plistPath { try? FileManager.default.removeItem(atPath: plistPath) }
+        NSStatusBar.system.removeStatusItem(item)
+        exit(0)
+    }
+
+    private func run(_ path: String, _ args: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = args
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
 }
 
 // MARK: - Call-end detection
@@ -1950,9 +2092,33 @@ func record(args: Args) async throws {
 // Entry point
 let args = Args.parse()
 
+/// Owns the watcher indicator for the process's lifetime. A main-actor singleton
+/// rather than a global var, so the reference is created and held on the actor
+/// that AppKit requires.
+@MainActor
+final class IndicatorHost {
+    static let shared = IndicatorHost()
+    private var indicator: WatcherIndicator?
+
+    func start(stateFile: String, plistPath: String?) -> Bool {
+        indicator = WatcherIndicator(stateFile: stateFile, plistPath: plistPath)
+        return indicator != nil
+    }
+}
+
 Task {
     do {
-        if args.selfTest {
+        if args.watchIndicator {
+            let ok = await MainActor.run {
+                IndicatorHost.shared.start(stateFile: args.stateFile,
+                                           plistPath: args.plistPath.isEmpty ? nil : args.plistPath)
+            }
+            if !ok {
+                fputs("meetey-capture: no GUI session — no watcher indicator\n", stderr)
+                exit(0)
+            }
+            // Held by IndicatorHost for the life of the process; AppKit drives it.
+        } else if args.selfTest {
             try selfTest()
         } else if args.listApps {
             try await listApps()
@@ -1981,6 +2147,10 @@ Task {
                                             before believing it (default 600)
                   --menu-bar                Show a menu bar indicator with a Stop
                                             Recording item while recording
+                  --watch-indicator         Run only a menu bar item for the watch
+                                            agent (used by the agent itself)
+                  --state-file <path>       Active-recording state the indicator
+                                            watches, to stand aside while recording
                   --label <text>            What to call this recording in the menu
                   --display <id>            Display to capture (default: the one
                                             showing the target app)
@@ -2002,14 +2172,14 @@ Task {
             }
             try await record(args: args)
         }
-        exit(0)
+        if !args.watchIndicator { exit(0) }
     } catch {
         fputs("meetey-capture: error: \(error.localizedDescription)\n", stderr)
         exit(1)
     }
 }
 
-if args.menuBar {
+if args.menuBar || args.watchIndicator {
     // A status item needs AppKit's run loop and an activation policy that keeps
     // the process out of the Dock and the app switcher. `.accessory` is what
     // makes an unbundled binary able to own a menu bar item at all.

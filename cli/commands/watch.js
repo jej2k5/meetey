@@ -50,7 +50,6 @@ You can also drive this from Claude Code with /meetey watch.
 
 function enable() {
   step("Starting the watch agent");
-  yellow("Checking it can see your windows...");
   const result = enableWatch({ ...ctx, nodePath: process.execPath, captureBinary: BINARY_PATH });
 
   if (result.error) {

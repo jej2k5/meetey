@@ -38,8 +38,8 @@ import { spawn, execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
-import { readActive, writeActive, clearActive, writePending } from "../mcp-server/session-state.js";
-import { writeHealth } from "../mcp-server/watch-agent.js";
+import { readActive, writeActive, clearActive, writePending, activeStatePath } from "../mcp-server/session-state.js";
+import { writeHealth, watchPaths } from "../mcp-server/watch-agent.js";
 
 const HOME = homedir();
 const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
@@ -415,9 +415,36 @@ function selfTest() {
 if (process.argv.includes("--selftest")) {
   selfTest();
 } else {
-  log(`meetey watch started (poll ${POLL_MS}ms)`);
+  /**
+ * The agent's menu bar presence, for exactly as long as the agent runs.
+ *
+ * A separate process because a status item needs AppKit, which Node has no
+ * access to — meetey-capture already owns that code. It is subordinate: if it
+ * fails to start or dies, the watcher carries on regardless. An indicator that
+ * could take the watcher down would be worse than no indicator.
+ */
+function startIndicator() {
+  if (!existsSync(CAPTURE_BINARY)) return null;
+  const { plistPath } = watchPaths(healthCtx);
+  const child = spawn(CAPTURE_BINARY, [
+    "--watch-indicator",
+    "--state-file", activeStatePath(MEETEY_DIR),
+    "--plist", plistPath,
+  ], { stdio: ["ignore", "ignore", "pipe"] });
+  child.stderr.on("data", (d) => process.stderr.write(d));
+  child.on("error", (e) => log(`indicator failed to start: ${e.message.split("\n")[0]}`));
+  return child;
+}
+
+log(`meetey watch started (poll ${POLL_MS}ms)`);
+const indicator = startIndicator();
   // A recording is stopped by the meeting ending, never by the agent exiting.
-  process.on("SIGTERM", () => { log("meetey watch stopping"); process.exit(0); });
+  process.on("SIGTERM", () => {
+  log("meetey watch stopping");
+  // The indicator means "the watcher is running", so it must not outlive it.
+  try { indicator?.kill("SIGTERM"); } catch { /* already gone */ }
+  process.exit(0);
+});
   setInterval(() => { tick().catch((e) => log(`tick failed: ${e.message}`)); }, POLL_MS);
   tick().catch((e) => log(`tick failed: ${e.message}`));
 }

@@ -82,13 +82,46 @@ function clearHealth({ meeteyDir, home }) {
   }
 }
 
-/** Blocking sleep-poll, matching the technique the MCP server already uses. */
-function waitFor(ms, done) {
+/**
+ * Blocking sleep-poll, matching the technique the MCP server already uses.
+ *
+ * `onTick` runs each iteration so a caller can show progress. The wait blocks
+ * the event loop, so a timer-driven spinner would simply never fire — the loop
+ * itself has to drive the frames. The quantum is short enough to animate at a
+ * readable rate and still costs nothing across a 25s wait.
+ */
+function waitFor(ms, done, onTick) {
   const deadline = Date.now() + ms;
+  let frame = 0;
   while (Date.now() < deadline && !done()) {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    onTick?.(frame++);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80);
   }
   return done();
+}
+
+/** Braille dots: the one spinner that reads as motion rather than as characters. */
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/**
+ * A spinner, when there is a terminal to draw it in.
+ *
+ * Piped or redirected output gets one plain line instead — carriage returns and
+ * braille frames in a log file are noise, and a CI transcript should read as
+ * text. This is the terminal's equivalent of honouring reduced motion.
+ */
+export function progress(label, { stream = process.stdout } = {}) {
+  const animated = Boolean(stream.isTTY);
+  if (!animated) stream.write(`${label}\n`);
+  return {
+    tick(frame) {
+      if (!animated) return;
+      stream.write(`\r  ${SPINNER[frame % SPINNER.length]} ${label}`);
+    },
+    done() {
+      if (animated) stream.write(`\r${" ".repeat(label.length + 6)}\r`);
+    },
+  };
 }
 
 const escapeXml = (s) =>
@@ -213,7 +246,13 @@ export function enableWatch({ meeteyDir, home, nodePath, captureBinary }) {
   // without this is how a watcher ends up installed, running, and permanently
   // blind — the failure logs one line every ten seconds and shows the user
   // nothing at all.
-  const reported = waitFor(25_000, () => readHealth({ meeteyDir, home }) !== null);
+  const spinner = progress("Checking it can see your windows");
+  const reported = waitFor(
+    25_000,
+    () => readHealth({ meeteyDir, home }) !== null,
+    (frame) => spinner.tick(frame),
+  );
+  spinner.done();
   const health = readHealth({ meeteyDir, home });
 
   if (!reported || !health?.canSeeWindows) {

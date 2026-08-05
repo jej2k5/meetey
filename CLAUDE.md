@@ -123,6 +123,28 @@ cheap. `giving up after` returns `gave up:true` *with the default button still
 named*, so the timeout must be checked before the button — a prompt nobody
 answered is not consent.
 
+**The watcher's menu bar indicator** — `meetey-capture --watch-indicator`, spawned by
+the agent and killed with it. A status item needs AppKit, which Node cannot reach,
+so it is a separate process; it is subordinate, and the watcher runs fine without
+it.
+
+Deliberately the quiet counterpart to `RecordingIndicator`: a monochrome
+`circle.dotted` against that one's solid red. Watching and recording are different
+things to be told, and a second attention-grabbing icon would weaken the only
+continuously-visible signal that a recording is happening.
+
+**It is still while idle.** Motion is at the seams only — settling in on launch,
+standing aside when a recording starts, returning when it ends. 500ms entrances,
+375ms exits (leaving is quicker than arriving), ease-out-quart, no bounce. A menu
+bar icon that moves for hours is animation fatigue: between state changes there is
+nothing to communicate, so nothing moves.
+`NSWorkspace.accessibilityDisplayShouldReduceMotion` is honoured — someone who
+asked the system to stop animating has asked us too.
+
+It exits when `getppid()` becomes 1. A clean stop signals it, but a crash does not,
+and launchd then restarts the agent and starts a *second* indicator — two icons
+claiming the same thing, one of them lying.
+
 **`mcp-server/watch-agent.js`** — enabling and disabling the agent. It lives under
 `mcp-server/` rather than `cli/` because both `meetey watch` and the MCP server's
 `enable_watcher` need it, and only `mcp-server/` and `daemon/` are copied into

@@ -212,7 +212,9 @@ Meetey can watch for meetings and offer to record them, so you don't have to thi
 /meetey watch log     What it has noticed
 ```
 
-Or from a terminal: `npx jej2k5/meetey watch enable | disable | status | logs`.
+Or from a terminal: `npx jej2k5/meetey watch enable | disable | status | log`.
+
+While it's on you'll see a quiet dotted circle in the menu bar — deliberately unlike the solid red dot that means recording, so the two are never confused. It sits still; it only moves when something actually changes, and it steps aside entirely while a recording is running so the red indicator has the bar to itself.
 
 **It never records on its own.** When it notices a meeting it asks, naming the window:
 
