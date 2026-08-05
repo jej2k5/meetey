@@ -40,6 +40,7 @@ import { homedir } from "os";
 import { dirname, join, resolve } from "path";
 import { readActive, writeActive, clearActive, writePending, activeStatePath } from "../mcp-server/session-state.js";
 import { writeHealth, watchPaths } from "../mcp-server/watch-agent.js";
+import { resolveWhisper } from "../mcp-server/whisper.js";
 
 const HOME = homedir();
 const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
@@ -212,13 +213,21 @@ function transcribeInBackground(wavPath) {
     log("whisper model missing — leaving the WAV untranscribed");
     return;
   }
+  const whisper = resolveWhisper();
+  if (!whisper) {
+    // Was ENOENT every time before this: launchd gives a job a minimal PATH with
+    // no Homebrew in it, so a bare `whisper-cli` never resolved here even though
+    // the identical call worked from Claude Code.
+    log("whisper-cli not found — leaving the WAV for /meetey stop to transcribe");
+    return;
+  }
   log(`transcribing ${wavPath}`);
 
   // spawn, not execFileSync. Whisper on an hour of audio runs for minutes, and a
   // synchronous call blocks Node's event loop for all of it — the poll never
   // fires, so a meeting starting right after one ends is missed entirely. Two
   // calls back to back is the ordinary case, not an edge case.
-  const child = spawn("whisper-cli", [
+  const child = spawn(whisper, [
     "-f", wavPath,
     "-m", MODEL_PATH,
     "-l", "en",

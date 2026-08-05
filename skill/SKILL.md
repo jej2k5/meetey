@@ -86,6 +86,7 @@ The recording also ends itself if the app quits, or if the chosen window closes 
    - `quality` — `{ level, reason, spokenWordsPerMinute, degradedRatio, silenceRatio }`, where `level` is `good`, `fair`, `poor`, or `unusable`
 3. If the stop result includes `framesDir`, call `get_keyframes` with it. Each frame has `path`, `offsetMs`, and usually `ocrText`. A frame may also have `revisitsMs`: later offsets at which that same screen came back on stage. Treat those as additional timestamps for the same content — a slide the group returned to is usually one they argued about, and it is worth a Screen Content line at the offset it came back, not just when it first appeared.
 4. If transcription fails, report the error and point the user at the Troubleshooting table in the README.
+5. If the result carries `recovered`, say so once: the recording had been interrupted and its audio was salvaged. It explains a duration that looks different from what the user remembers, and it is reassuring rather than alarming — the audio was not lost.
 
 ### Interpret
 

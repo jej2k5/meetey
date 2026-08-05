@@ -163,6 +163,20 @@ It exits when `getppid()` becomes 1. A clean stop signals it, but a crash does n
 and launchd then restarts the agent and starts a *second* indicator — two icons
 claiming the same thing, one of them lying.
 
+**`mcp-server/whisper.js`** — resolves `whisper-cli` to an absolute path. Calling it
+by bare name works from Claude Code, which inherits a login shell's PATH, and fails
+from the watch agent, which does not: launchd gives a job
+`/usr/bin:/bin:/usr/sbin:/sbin` and Homebrew installs to `/opt/homebrew/bin`. Every
+agent recording failed to transcribe with ENOENT, logged where nobody looks, while
+the identical call succeeded from the editor. **Never invoke a Homebrew binary by
+bare name from anything launchd starts.**
+
+**`repairWavHeader`** (in `quality.js`) — a capture killed before it finalises leaves
+every sample on disk behind a header declaring zero bytes, so the recording reads as
+empty to players and to whisper despite being intact. `transcribe` repairs it on the
+way through. It only rewrites a header that declares zero; a plausible size is left
+alone.
+
 **`mcp-server/watch-agent.js`** — enabling and disabling the agent. It lives under
 `mcp-server/` rather than `cli/` because both `meetey watch` and the MCP server's
 `enable_watcher` need it, and only `mcp-server/` and `daemon/` are copied into

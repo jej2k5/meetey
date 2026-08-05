@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { openSync, readSync, closeSync } from "fs";
+import { openSync, readSync, writeSync, closeSync, statSync } from "fs";
 
 // whisper.cpp emits these as segment text when it hears no usable speech.
 // They are the strongest signal that a recording captured the wrong thing.
@@ -28,6 +28,43 @@ const FILLER = /^[\s\[\(]*(blank_audio|silence|music|inaudible|no speech|sound|a
  * Assumes the canonical 44-byte header that WAVWriter emits. Returns null for
  * anything else rather than guessing.
  */
+/**
+ * Repairs a WAV whose header was never finalised.
+ *
+ * The capture writes a placeholder header at the start and fills in the two size
+ * fields when it stops. A capture killed before that leaves every sample on disk
+ * behind a header claiming zero bytes of audio — the recording looks empty to any
+ * player, and to whisper, despite being entirely intact.
+ *
+ * Only touches a header that declares zero. A plausible size is left alone; a file
+ * that is merely shorter than expected is not ours to rewrite.
+ */
+export function repairWavHeader(path) {
+  let fd;
+  try {
+    fd = openSync(path, "r+");
+    const header = Buffer.alloc(44);
+    if (readSync(fd, header, 0, 44, 0) < 44) return { repaired: false, reason: "too short to be a WAV" };
+    if (header.toString("ascii", 0, 4) !== "RIFF") return { repaired: false, reason: "not a RIFF file" };
+
+    const declared = header.readUInt32LE(40);
+    const actual = statSync(path).size - 44;
+    if (actual <= 0) return { repaired: false, reason: "no audio data" };
+    if (declared !== 0) return { repaired: false };
+
+    const sizes = Buffer.alloc(4);
+    sizes.writeUInt32LE(36 + actual);
+    writeSync(fd, sizes, 0, 4, 4);
+    sizes.writeUInt32LE(actual);
+    writeSync(fd, sizes, 0, 4, 40);
+    return { repaired: true, dataBytes: actual };
+  } catch (e) {
+    return { repaired: false, reason: e.message };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 export function wavDurationMs(path) {
   let fd;
   try {

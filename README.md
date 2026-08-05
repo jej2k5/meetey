@@ -355,6 +355,7 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Recording stopped early | It ends when your call ends, the app quits, or the captured window closes. Rejoining in a new window won't resume it |
 | Recording didn't stop when the call ended | Only fires if the app took the microphone in the first place — joining by phone while sharing your screen leaves nothing to detect. It falls back to stopping when the app quits |
 | `/meetey stop` says no recording is active | If it already stopped itself, `/meetey stop` still collects it. If that fails, the WAV is in `~/.meetey/recordings/` |
+| Watcher records but nothing is transcribed | Fixed in 1.5.1 — `whisper-cli` was unreachable from the background agent. Older recordings still transcribe: run `/meetey stop`, or ask Claude to transcribe the WAV |
 | Watcher never asks | `/meetey watch` — if it says it can't see windows, Node needs Screen Recording permission, separately from the capture binary |
 | Watcher asks about things that aren't meetings | Expected — it errs toward asking. Say "Not now" and it drops that window |
 

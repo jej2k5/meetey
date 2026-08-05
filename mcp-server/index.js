@@ -21,7 +21,8 @@ import { spawn, execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, join, resolve } from "path";
-import { assessQuality, formatDuration, wavDurationMs } from "./quality.js";
+import { assessQuality, formatDuration, wavDurationMs, repairWavHeader } from "./quality.js";
+import { resolveWhisper } from "./whisper.js";
 import {
   deleteRecording, getRecording, listRecordings, searchRecordings, systemStatus,
 } from "./library.js";
@@ -479,6 +480,11 @@ function transcribe({ wavPath: filePath }) {
     return { error: `Whisper model not found at ${MODEL_PATH}. Run: npx jej2k5/meetey install` };
   }
 
+  // A capture that was killed before finalising leaves every sample on disk
+  // behind a header claiming the file is empty. Fix it here rather than making
+  // the user find out their recording "has no audio".
+  const repair = repairWavHeader(filePath);
+
   try {
     const jsonPath = filePath.replace(/\.wav$/, ".wav.json");
 
@@ -489,7 +495,11 @@ function transcribe({ wavPath: filePath }) {
       statSync(jsonPath).mtimeMs >= statSync(filePath).mtimeMs;
 
     if (!cached) {
-      execFileSync("whisper-cli", [
+      const whisper = resolveWhisper();
+      if (!whisper) {
+        return { error: "whisper-cli not found. Run: brew install whisper-cpp" };
+      }
+      execFileSync(whisper, [
         "-f", filePath,
         "-m", MODEL_PATH,
         "-l", "en",
@@ -519,6 +529,9 @@ function transcribe({ wavPath: filePath }) {
     const durationMs = wavDurationMs(filePath);
 
     return {
+      ...(repair.repaired
+        ? { recovered: `This recording's header was never written — the capture was interrupted. Recovered ${Math.round(repair.dataBytes / 32000)}s of audio from it.` }
+        : {}),
       transcript,
       segments,
       jsonPath,
