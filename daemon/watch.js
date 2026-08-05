@@ -273,13 +273,33 @@ function startRecording(window, mode) {
   activeCapture = child;
 
   let autoStopReason = null;
+  let confirmedStart = false;
   child.stderr.on("data", (d) => {
     const text = d.toString();
     process.stderr.write(text);
+    if (/recording started/.test(text)) confirmedStart = true;
     const reason = text.match(/auto-stop — (.+)/);
     if (reason) autoStopReason = reason[1].trim();
     if (/call ended — trimming/.test(text)) autoStopReason = "the call ended";
   });
+
+  // A spawn failure emits `error`, never `exit`. Without a listener that is an
+  // unhandled error event, which would take the whole agent down.
+  child.on("error", (e) => {
+    activeCapture = null;
+    clearActive(MEETEY_DIR);
+    log(`capture failed to start: ${e.message.split("\n")[0]}`);
+  });
+
+  // Capture opens the stream and only then writes anything. If it never gets
+  // that far it can sit holding the active-recording lock indefinitely, and the
+  // log looks identical to a healthy recording — which is exactly how a silent
+  // 35-minute non-recording goes unnoticed.
+  setTimeout(() => {
+    if (!confirmedStart && activeCapture === child) {
+      log(`WARNING: ${sessionId} has not started capturing after 30s — it may be stuck in setup`);
+    }
+  }, 30_000).unref?.();
 
   const startedAt = new Date().toISOString();
   writeActive(MEETEY_DIR, {
@@ -296,11 +316,18 @@ function startRecording(window, mode) {
   });
   log(`recording ${sessionId} (${mode === "screen" ? "audio + screen" : "audio"}) — ${window.title}`);
 
-  child.on("exit", () => {
+  child.on("exit", (code, signal) => {
     activeCapture = null;
     clearActive(MEETEY_DIR);
-    log(`recording ${sessionId} ended`);
-    if (!existsSync(outputPath)) return;
+    // Say how it ended. "ended" alone reads the same whether it recorded an hour
+    // or died during setup, which makes a failure indistinguishable from success.
+    const how = signal ? `killed by ${signal}` : code === 0 ? "cleanly" : `exit ${code}`;
+    log(`recording ${sessionId} ended (${how}${confirmedStart ? "" : ", never started capturing"})`);
+
+    if (!existsSync(outputPath)) {
+      log(`no audio file at ${outputPath} — nothing to transcribe`);
+      return;
+    }
 
     // Leave a record for /meetey stop to collect. Clearing the active state is
     // right — nothing is recording any more — but this recording ended in a
