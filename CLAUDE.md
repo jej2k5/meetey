@@ -370,6 +370,24 @@ node mcp-server/index.js   # must answer tools/list
 node daemon/watch.js --selftest
 ```
 
+## Audio and video are separate streams
+
+An `SCStream` has **one filter for both**, so scoping a stream to a window scopes
+its *audio* to that window's lifetime. Google Meet replaces its window when you
+join a call, which killed the whole stream seconds in and turned a 32-minute
+meeting into six seconds of audio and zero keyframes.
+
+So `record()` builds two streams: audio always app-scoped, video window-scoped when
+a window was chosen. The window narrowing that keeps other windows and notification
+banners out of frame is preserved without making the recording depend on a window
+the app is free to destroy. Audio is the irreplaceable part — **never scope it to
+anything the app controls the lifetime of.**
+
+`didStopWithError` acts rather than only logging. Video stopping is survivable and
+says so; audio stopping ends the recording through the same path as a signal, so
+what was captured is finalised instead of the process running on writing nothing.
+Logging and continuing is precisely how the six-second recording happened.
+
 ## The shareable-content query has a deadline
 
 `SCShareableContent.current` does **not** reliably throw when Screen Recording

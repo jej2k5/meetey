@@ -1251,6 +1251,14 @@ final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
     private let writer: WAVWriter
     private let keyframes: KeyframeWriter?
 
+    /// Set after construction so a stopped stream can be identified. Audio dying
+    /// is the end of the recording; video dying costs only the screen content.
+    weak var audioStream: SCStream?
+    weak var videoStream: SCStream?
+    /// Called when audio stops, so the recording can be finalised rather than
+    /// left running against a dead stream.
+    var onAudioLost: (() -> Void)?
+
     init(writer: WAVWriter, keyframes: KeyframeWriter?) {
         self.writer = writer
         self.keyframes = keyframes
@@ -1307,7 +1315,18 @@ final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        fputs("meetey-capture: stream stopped: \(error.localizedDescription)\n", stderr)
+        // Logging this and carrying on is how a 32-minute meeting became six
+        // seconds of audio: the stream was dead within seconds, nothing was
+        // written after, and nothing said so until the file was opened.
+        if stream === videoStream {
+            fputs("meetey-capture: screen capture stopped (\(error.localizedDescription)) — "
+                + "the captured window probably closed. Audio continues.\n", stderr)
+            videoStream = nil
+            return
+        }
+        fputs("meetey-capture: audio capture stopped (\(error.localizedDescription)) — "
+            + "saving what was recorded\n", stderr)
+        onAudioLost?()
     }
 }
 
@@ -1899,16 +1918,20 @@ func record(args: Args) async throws {
         exit(1)
     }
 
-    // Scoping to a single window keeps the app's other windows and its
-    // notification banners out of frame entirely — they are a large source of
-    // spurious keyframes as well as the main privacy exposure.
+    // Audio is always app-scoped, and never window-scoped.
     //
-    // Only ever applied when video is on. Audio-only recordings keep the
-    // app-scoped filter that the transcript path has always used: a window filter
-    // buys nothing without video, and audio is the product — it does not get put
-    // at risk for a capture that isn't happening.
-    let filter = (args.video ? window : nil).map { SCContentFilter(display: display, including: [$0]) }
-        ?? SCContentFilter(display: display, including: [app], exceptingWindows: [])
+    // An SCStream has one filter for both audio and video, so scoping the stream
+    // to a window scopes the *audio* to that window's lifetime too. Google Meet
+    // replaces its window on joining a call, which killed the whole stream
+    // seconds in and left a 32-minute meeting as six seconds of audio. Audio is
+    // the irreplaceable part; it does not get tied to a window that the app is
+    // free to destroy.
+    //
+    // Video gets its own stream when a window was chosen, so the narrowing that
+    // keeps other windows and notification banners out of frame is preserved
+    // without putting the recording at risk.
+    let audioFilter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
+    let videoFilter = window.map { SCContentFilter(display: display, including: [$0]) } ?? audioFilter
 
     let config = SCStreamConfiguration()
     config.capturesAudio = true
@@ -1963,13 +1986,40 @@ func record(args: Args) async throws {
 
     let writer = try WAVWriter(path: args.outputPath)
     let delegate = CaptureDelegate(writer: writer, keyframes: keyframes)
-    let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
 
-    try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
+    // Audio-only config, so the audio stream never carries the cost or the
+    // fragility of a real video pipeline.
+    let audioConfig = SCStreamConfiguration()
+    audioConfig.capturesAudio = true
+    audioConfig.excludesCurrentProcessAudio = true
+    audioConfig.sampleRate = 16000
+    audioConfig.channelCount = 1
+    audioConfig.width = 2
+    audioConfig.height = 2
+
+    let audioStream = SCStream(filter: audioFilter, configuration: audioConfig, delegate: delegate)
+    try audioStream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
+    delegate.audioStream = audioStream
+
+    var videoStream: SCStream? = nil
     if args.video {
-        try stream.addStreamOutput(delegate, type: .screen, sampleHandlerQueue: .global(qos: .userInitiated))
+        config.capturesAudio = false
+        let separate = SCStream(filter: videoFilter, configuration: config, delegate: delegate)
+        try separate.addStreamOutput(delegate, type: .screen, sampleHandlerQueue: .global(qos: .userInitiated))
+        videoStream = separate
+        delegate.videoStream = separate
     }
-    try await stream.startCapture()
+
+    try await audioStream.startCapture()
+    if let videoStream {
+        do {
+            try await videoStream.startCapture()
+        } catch {
+            // Losing the screen is survivable; losing the meeting is not.
+            fputs("meetey-capture: screen capture failed to start (\(error.localizedDescription)) — continuing with audio\n", stderr)
+            delegate.videoStream = nil
+        }
+    }
     fputs("meetey-capture: recording started\n", stderr)
 
     // Use AsyncStream to bridge DispatchSource signal handlers into async context
@@ -1995,6 +2045,10 @@ func record(args: Args) async throws {
     sigintSrc.setEventHandler  { fireOnce() }
     sigtermSrc.resume()
     sigintSrc.resume()
+
+    // A dead audio stream ends the recording the same way a signal does, so what
+    // was captured is finalised instead of the process running on writing nothing.
+    delegate.onAudioLost = { fireOnce() }
 
     if let timeout = args.stopAfter {
         Task {
@@ -2125,7 +2179,8 @@ func record(args: Args) async throws {
 
     for await _ in stopStream { break }
 
-    try await stream.stopCapture()
+    try? await audioStream.stopCapture()
+    if let videoStream { try? await videoStream.stopCapture() }
     if let indicator {
         await MainActor.run { indicator.remove() }
     }
