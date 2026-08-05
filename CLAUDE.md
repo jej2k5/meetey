@@ -141,6 +141,14 @@ nothing to communicate, so nothing moves.
 `NSWorkspace.accessibilityDisplayShouldReduceMotion` is honoured — someone who
 asked the system to stop animating has asked us too.
 
+Standing aside means `isVisible = false`, not just zero alpha. Fading to
+transparent hides the icon but **keeps its slot**, so the recording indicator
+arrives into a bar one item fuller than it looks — and on a crowded bar macOS
+silently drops what does not fit, which is the newest item, which is the red dot.
+This shipped broken: the red indicator stopped appearing entirely. Fade first,
+release the slot on completion; on the way back, take the slot before fading in or
+there is nothing to fade.
+
 It exits when `getppid()` becomes 1. A clean stop signals it, but a crash does not,
 and launchd then restarts the agent and starts a *second* indicator — two icons
 claiming the same thing, one of them lying.

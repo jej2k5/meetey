@@ -1054,9 +1054,36 @@ final class WatcherIndicator: NSObject {
         statusLine.title = active ? "Recording — see the red indicator" : "Watching for meetings"
 
         guard let button = item.button else { return }
-        guard !Self.reduceMotion else { button.alphaValue = active ? 0 : 1; return }
-        animate(button, to: active ? 0 : 1,
-                duration: active ? Self.exitDuration : Self.enterDuration)
+
+        // Fading to zero alpha hides the icon but keeps its slot in the menu bar,
+        // so the recording indicator arrives into a bar that is one item fuller
+        // than it looks. On a crowded bar macOS silently drops what does not fit,
+        // and the newest item — the red dot — is what gets dropped. Only
+        // `isVisible` actually gives the space back.
+        guard !Self.reduceMotion else {
+            button.alphaValue = active ? 0 : 1
+            item.isVisible = !active
+            return
+        }
+
+        if active {
+            // Fade out, then release the slot, so the red dot has room.
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = Self.exitDuration
+                context.timingFunction = Self.easeOutQuart
+                button.animator().alphaValue = 0
+            }, completionHandler: { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.recordingActive else { return }
+                    self.item.isVisible = false
+                }
+            })
+        } else {
+            // Take a slot again before fading back in, or there is nothing to fade.
+            item.isVisible = true
+            button.alphaValue = 0
+            animate(button, to: 1, duration: Self.enterDuration)
+        }
     }
 
     @objc private func stopWatching() {
