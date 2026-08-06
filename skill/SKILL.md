@@ -309,9 +309,12 @@ recording on its own, and the prompt lets the user pick audio only or audio + sc
 so it is not something to switch on helpfully because a user just missed a recording —
 offer it, and let them answer. Turning it *off* on request needs no such hesitation.
 
-Say plainly what it does not do: it does not detect that a *call* ended. A recording stops
-when the app quits or the captured window closes, not when a meeting wraps up while the
-app stays open.
+**How a recording ends.** It stops when the app quits, or when the call itself ends —
+detected by the meeting app releasing the microphone, then confirmed over ten quiet
+minutes before anything is committed, with the recording trimmed back to when the call
+actually finished. Closing a window does not end it. Describe it in those terms rather
+than promising it "knows when your meeting is over": a call that keeps the microphone
+open, or a participant who never unmutes, will run on until the app quits.
 
 ---
 
@@ -334,9 +337,9 @@ If asked about recording meetings automatically, describe what actually exists: 
 optional watcher (`/meetey watch on`, or `npx jej2k5/meetey watch enable` in a terminal —
 there is no bare `meetey` command on PATH) that notices meetings in Chrome,
 Zoom, and Teams and **asks** before recording, offering audio only or audio + screen. It is off until enabled and
-never records on its own. Do not describe it as detecting when a meeting *ends* — a
-recording stops when the app quits or the captured window closes, not when a call wraps
-up while the app stays open.
+never records on its own. A recording ends when the call ends or the app quits, and the
+transcript is written automatically; `/meetey writeup` adds the notes for anything
+recorded while the user was away.
 
 ---
 

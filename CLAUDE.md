@@ -74,7 +74,7 @@ The admin tools were reachable by natural language from the start; the subcomman
 ## The watch agent
 
 **`daemon/watch.js`** — a launchd LaunchAgent that notices meetings and *asks*
-whether to record them. Off until `meetey watch enable`; `disable`, `status`, and
+whether to record them. Off until `npx jej2k5/meetey watch enable`; `disable`, `status`, and
 `logs` round out the CLI (`cli/commands/watch.js`).
 
 **A meeting's identity is its window *and* its normalised title**, not the window

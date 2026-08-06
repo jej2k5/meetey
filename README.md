@@ -37,6 +37,7 @@ After installation, open System Settings → Privacy & Security → Screen Recor
 /meetey status   Check whether a recording is active
 
 /meetey watch    Ask to record meetings automatically (off by default)
+/meetey writeup  Write notes for meetings recorded while you were away
 
 /meetey list     Browse past meetings
 /meetey show     Open one meeting's notes
@@ -127,10 +128,12 @@ Notes are written to `~/.meetey/recordings/` as `YYYY-MM-DD-HHMM-<slug>.md` — 
 
 ### If you forget to stop
 
-Forget step 3 and the recording still ends itself — when your call ends, or when the app quits or the captured window closes. Run `/meetey stop` afterwards anyway to write the notes; it picks the finished recording up and tells you why it ended.
+Forget step 3 and the recording still ends itself — when your call ends, or when the app quits. Run `/meetey stop` afterwards anyway to write the notes; it picks the finished recording up and tells you why it ended.
 
 Ending on the call itself is worth explaining, because it works differently than you'd expect. Meetey watches whether the meeting app is holding the microphone, which apps release when you hang up (muting yourself doesn't count — that's just a switch). But that clue is occasionally wrong, and stopping a live meeting by mistake loses audio you can't get back. So instead of stopping, it notes the time and **keeps recording**. If the call turns out to still be going, the note is thrown away and nothing is lost. Only after ten quiet minutes — and only if nobody spoke during them — does it stop, and then it cuts the file back to the moment you actually hung up. The waiting never reaches your transcript.
 
+
+**A recording is never a stub.** The audio file is valid and playable at every moment while it's being written, not only once it finishes cleanly. Kill the process, lose power, close the laptop — whatever is on disk plays and transcribes up to that second. Earlier versions wrote the file's header only at the end, so any interruption in an hour-long meeting destroyed all of it.
 
 When the transcription is unreliable, the notes say so at the top instead of summarizing noise with a confident voice:
 
@@ -237,10 +240,12 @@ Skip and it won't ask again for that meeting. A prompt you never answer times ou
 Three things worth being clear about:
 
 - **It is off until you turn it on**, and turning it on installs a login agent that persists across restarts until you turn it off.
-- **You choose what it captures.** The prompt offers audio only or audio + screen, and screen capture covers just the meeting window it found — narrower than what `/meetey start` captures by default.
-- **It does not detect that a call *ended*.** The recording stops when the app quits or the captured window closes — not when a meeting wraps up while the app stays open. Detection is deliberately loose in the other direction too: it would rather ask about something that isn't a meeting than miss one, since a wrong guess costs one dismissed dialog.
+- **You choose what it captures.** The prompt offers audio only or audio + screen. Screen capture covers everything the app displays — other tabs, other windows, notification banners — so close or mute anything sensitive first.
+- **A recording ends when the call does, when the app quits, or when you stop it.** Closing a window no longer ends it — that cost several recordings, because Google Meet replaces its window when you join a call. Detection is deliberately loose in the other direction too: it would rather ask about something that isn't a meeting than miss one, since a wrong guess costs one dismissed dialog.
 
-Recordings it makes are transcribed as soon as they end, so they're ready by the time you get to them. `/meetey list` shows them alongside everything else; `/meetey stop` works on one that's still running.
+**A transcript appears on its own.** When a recording ends, the watcher runs whisper and writes a readable, timestamped transcript into `~/.meetey/recordings/` within about a minute — no Claude Code, no authentication, nothing to remember. Even if you never open an editor, the meeting is legible.
+
+Notes are the part that needs Claude, so those wait for you. `/meetey writeup` writes them for everything that piled up while you were away; `/meetey stop` handles a recording that just finished or is still running.
 
 Enabling checks that it can actually see your windows before saying it worked, so if permission is missing you'll be told at that moment rather than discovering it after a missed meeting. `/meetey watch` reports the same thing any time.
 
@@ -278,8 +283,9 @@ Nothing records without a person saying so. `/meetey start` is explicit, and the
 
 ```bash
 npx jej2k5/meetey install         # First-time setup
-npx jej2k5/meetey update          # Rebuild binary and refresh MCP server + skill
+npx jej2k5/meetey update          # Rebuild, refresh, restart the watcher, and verify
 npx jej2k5/meetey status          # Show what's installed and whether everything is wired up
+npx jej2k5/meetey verify          # Prove this machine can record and transcribe
 
 npx jej2k5/meetey watch enable    # Watch for meetings and offer to record them
 npx jej2k5/meetey watch disable   # Stop watching
@@ -363,7 +369,7 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 | Slide changes missed | Lower `--scene-threshold` (fewer cells needed to count as a new scene) |
 | Keyframe text is garbled | Confirm the meeting window isn't scaled down; OCR runs on the captured resolution |
 | Keyframes from the wrong screen | Pass a `displayID`, or pick a window — Meetey otherwise guesses from where the app is |
-| Recording stopped early | It ends when your call ends, the app quits, or the captured window closes. Rejoining in a new window won't resume it |
+| Recording stopped early | It ends when your call ends or the app quits. Closing a window does not end it |
 | Recording didn't stop when the call ended | Only fires if the app took the microphone in the first place — joining by phone while sharing your screen leaves nothing to detect. It falls back to stopping when the app quits |
 | `/meetey stop` says no recording is active | If it already stopped itself, `/meetey stop` still collects it. If that fails, the WAV is in `~/.meetey/recordings/` |
 | Recording stops seconds after starting | Fixed in 1.5.3 — the watcher was checking for windows during recordings, which macOS treats as a competing capture and terminates the live one |
@@ -380,7 +386,7 @@ To switch, download the model to `~/.meetey/models/` and set `MEETEY_MODEL` in t
 watch agent   ↗  (~/.meetey/daemon/, optional)               → whisper-cli
 ```
 
-**meetey-capture** is a Swift CLI using ScreenCaptureKit. It takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, and stops on SIGTERM, on `--stop-after`, or via `--auto-stop` when the app quits or the captured window closes. With `--video` it also samples the screen, keeps a JPEG when the picture settles into something new, and runs Vision OCR on each one.
+**meetey-capture** is a Swift CLI using ScreenCaptureKit. It takes `--app <bundle-id>` and `--output <path.wav>`, records app audio as 16-bit PCM WAV at 16 kHz mono, and stops on SIGTERM, on `--stop-after`, or via `--auto-stop` when the app quits. With `--video` it also samples the screen, keeps a JPEG when the picture settles into something new, and runs Vision OCR on each one.
 
 **MCP server** manages the capture process lifecycle and shells out to `whisper-cli` for transcription. Registered globally in `~/.claude.json` so it's available in every Claude Code session.
 
@@ -402,12 +408,18 @@ node ~/.meetey/daemon/watch.js --selftest   # meeting detection patterns
 | `~/.meetey/recordings/*.wav` | Raw audio from each session |
 | `~/.meetey/recordings/YYYY-MM-DD-HHMM-<slug>.md` | Structured notes — summary, timestamped decisions and action items, screen content |
 | `~/.meetey/recordings/YYYY-MM-DD-HHMM-<slug>-transcript.md` | Full transcript, one timestamped line per utterance |
+| `~/.meetey/recordings/meetey-<id>-transcript.md` | Transcript written automatically when a watched recording ends, before it has notes. Renamed to match once written up |
+| `~/.meetey/recordings/*.wav.json` | Whisper's raw output, reused so a recording is never transcribed twice |
 | `~/.meetey/recordings/*-frames/` | Screen keyframes + `index.json` (only when screen capture was used) |
 | `~/.meetey/models/ggml-base.en.bin` | Whisper model |
 | `~/.meetey/mcp-server/` | MCP server (stable install location) |
 | `~/.meetey/meetey-capture/` | Swift binary and sources |
 | `~/.meetey/daemon/` | Watch agent (dormant unless enabled) |
 | `~/.meetey/state/active.json` | Which recording is running, if any — removed when it ends |
+| `~/.meetey/state/pending.json` | A finished recording nobody has written up yet |
+| `~/.meetey/state/watch-handled.json` | Meetings already offered, so you aren't asked twice |
+| `~/.meetey/state/watch-health.json` | Whether the watcher can currently see your windows |
+| `~/.meetey/state/update-check.json` | Cached result of the daily release check |
 | `~/.meetey/logs/watch.log` | Watcher activity (only when enabled) |
 | `~/Library/LaunchAgents/com.meetey.watch.plist` | Watcher login agent (only when enabled) |
 
@@ -431,6 +443,8 @@ codesign --force --sign - --options runtime --entitlements entitlements.plist \
 ```
 
 Then restart Claude Code so the MCP server reconnects.
+
+`update` restarts the meeting watcher for you if it's enabled — launchd keeps running whatever it loaded, so replacing the files on disk isn't enough on its own. It also runs the checks above and tells you plainly if the machine can't record.
 
 New source files should carry the Apache 2.0 header used by the existing files.
 By contributing, you agree that your contributions are licensed under the Apache
