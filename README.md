@@ -254,6 +254,7 @@ Everything about the library is reachable from Claude Code — there's no separa
 | `/meetey show` | *"show me the standup from Thursday"* | `get_recording` — one meeting in full, including the notes and paths to its audio, transcript, and keyframes |
 | `/meetey search` | *"what did we decide about the API cutover?"* | `search_recordings` — searches every meeting's notes and transcripts, returning the matching line **with its `[mm:ss]`** so you land on the moment |
 | `/meetey delete` | *"delete yesterday's test recording but keep the notes"* | `delete_recording` — shows what it would delete and does nothing until you confirm; `--keep-notes` drops the audio and keyframes but keeps the writing |
+| `/meetey writeup` | *"write up the meetings I missed"* | Notes for recordings the watcher captured while you were away — the transcript is already there, this adds the summary, decisions and action items |
 | `/meetey doctor` | *"is meetey working? screen recording seems broken"* | `system_status` — install health, Screen Recording permission, active model, disk used |
 
 `/meetey status` is about the recording running *right now*; `/meetey doctor` is about whether the install itself is healthy.

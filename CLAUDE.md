@@ -60,6 +60,13 @@ Joining the library is the non-obvious part. Three independently-named things ha
 
 **`mcp-server/quality.js`** — Deterministic transcript assessment, kept out of `index.js` so it stays unit-testable. `wavDurationMs()` reads the exact length from the WAV header rather than subtracting wall-clock start/stop (which includes process spin-up and the SIGTERM drain). `assessQuality()` grades a transcript `good`/`fair`/`poor`/`unusable` from fragment rate, whisper looping, and speech pace measured against *spoken* time — so a quiet meeting isn't penalised for its silences. Each segment counts toward `degradedRatio` at most once; summing the categories independently lets the ratio exceed 1.0.
 
+**`/meetey writeup`** exists because the watcher and Claude do different halves of
+the job. Transcription is local and automatic; notes need Claude and therefore wait
+for a session. Without it only the single most recent recording was reachable, via
+`/meetey stop` — anything that piled up while nobody was at the keyboard had no
+route at all. It reads the transcript the watcher already wrote rather than
+re-deriving it.
+
 **`skill/SKILL.md`** — The `/meetey` slash command. Capture subcommands: `start` drives `list_apps → start_recording`; `stop` drives `stop_recording → transcribe → get_keyframes` and writes two files; `status` calls `get_status`. Library subcommands map one-to-one onto the admin tools — `list`, `show`, `search`, `delete`, `doctor` for `list_recordings`, `get_recording`, `search_recordings`, `delete_recording`, `system_status`.
 
 The admin tools were reachable by natural language from the start; the subcommands exist because that made them undiscoverable — nothing in the skill menu revealed the library existed. Both routes are supported and neither is the canonical one, so don't redirect a user from one to the other. `system_status` is `doctor` rather than anything containing "status" because `/meetey status` already means "is a recording running".

@@ -1,5 +1,5 @@
 ---
-description: "Capture and transcribe meeting audio, optionally with screen content, and manage the meeting library. Commands: start | stop | status | list | show | search | delete | doctor"
+description: "Capture and transcribe meeting audio, optionally with screen content, and manage the meeting library. Commands: start | stop | status | watch | writeup | list | show | search | delete | doctor"
 ---
 
 # Meetey Skill
@@ -34,6 +34,7 @@ Meetey — local meeting capture
   /meetey status   Check if a recording is active
 
   /meetey watch    Ask to record meetings automatically (off by default)
+  /meetey writeup  Write notes for meetings recorded while you were away
 
   /meetey list     Browse past meetings
   /meetey show     Open one meeting's notes
@@ -249,6 +250,34 @@ quality: the WAV is nearly all of the disk, and the notes are the part worth kee
 
 Deleting keyframes makes any screen-content claim in the notes unverifiable. Say so when
 the session has frames and the user is not using `--keep-notes`.
+
+---
+
+## `/meetey writeup`
+
+Writes notes for recordings that were captured but never written up — which is what
+the watcher leaves behind whenever it records a meeting you never came back to.
+
+1. Call `list_recordings` with `hasNotes: false`. Those are recordings with audio and
+   no notes.
+2. If there are none, say so in one line and stop. "Everything's written up."
+3. Otherwise show what is waiting — date, duration, quality — newest first, and write
+   up the most recent unless the user asks for more or names one. Offer the rest.
+4. For each one being written up:
+   - **The transcript almost certainly already exists.** The watcher writes
+     `<sessionId>-transcript.md` as soon as a recording ends. Read it rather than
+     re-deriving it; `transcribe` also reuses whisper's cached output, so calling it
+     is cheap, but never transcribe from scratch when a transcript is on disk.
+   - Call `get_keyframes` when the record has a `frames` directory.
+   - Produce the same document as `/meetey stop`, following the Output section below.
+   - **Rename** the session transcript to `<notes-stem>-transcript.md` rather than
+     writing a second one.
+
+Say plainly when a recording is old — a meeting from three days ago written up now is
+still useful, but the user should know which day they are reading about.
+
+This is deliberately separate from `/meetey stop`, which acts on the recording that
+just finished. `writeup` is for the pile that accumulated while nobody was looking.
 
 ---
 

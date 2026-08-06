@@ -461,8 +461,8 @@ function unwrittenRecordings() {
         date: r.date ?? null,
       })),
       hint:
-        `${unwritten.length} recording(s) have audio but no notes. The most recent is ` +
-        `${latest.sessionId}; call transcribe with its wavPath to write it up.`,
+        `${unwritten.length} recording(s) have audio but no notes — the most recent is ` +
+        `${latest.sessionId}. /meetey writeup handles these.`,
     };
   } catch {
     return {};
@@ -949,6 +949,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["good", "fair", "poor", "unusable"],
             description: "Only recordings whose transcript scored this quality level.",
+          },
+          hasNotes: {
+            type: "boolean",
+            description:
+              "false returns recordings that have audio but no notes — captured and never written up, " +
+              "which is what the watcher leaves behind when nobody is at the keyboard.",
           },
           limit: { type: "number", description: "Return at most this many (still reports the full match count)." },
         },
