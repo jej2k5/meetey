@@ -70,6 +70,13 @@ The admin tools were reachable by natural language from the start; the subcomman
 whether to record them. Off until `meetey watch enable`; `disable`, `status`, and
 `logs` round out the CLI (`cli/commands/watch.js`).
 
+**A meeting's identity is its window *and* its normalised title**, not the window
+alone. Window-only meant a second meeting started in the same Chrome window read as
+already handled and was silently never offered — an instant Meet after an earlier
+call simply never prompted. Title-only flickers, because Chrome adds and removes a
+🔊 marker while a tab plays audio. Both together are stable within a call and
+distinct across calls; `normalizeTitle` strips the decoration.
+
 **It never starts a recording on its own.** Every recording it produces was
 authorised by someone choosing a capture mode in a dialog naming the specific window.
 That is what makes it safe for detection to be loose: a false positive costs one

@@ -66,7 +66,10 @@ const PROMPT_TIMEOUT_S = 120;
  * silence.
  */
 const MEETING_PATTERNS = [
-  { bundleID: "com.google.Chrome", test: (t) => /google meet|^meet\s*[–—-]|zoom\.us\/(j|wc)\/|teams\.microsoft\.com|whereby|meet\.jit\.si/i.test(t) },
+  // `^meet\b` rather than requiring a dash: an instant meeting can be titled just
+  // "Meet". \b keeps "Meeting notes" out, since there is no boundary inside
+  // "meeting".
+  { bundleID: "com.google.Chrome", test: (t) => /google meet|meet\.google\.com|^meet\b|zoom\.us\/(j|wc)\/|teams\.microsoft\.com|whereby|meet\.jit\.si/i.test(t) },
   { bundleID: "us.zoom.xos", test: (t) => /zoom (meeting|webinar)/i.test(t) },
   { bundleID: "com.microsoft.teams", test: (t) => /meeting|\bcall\b/i.test(t) },
 ];
@@ -108,6 +111,8 @@ function saveHandled() {
 const handled = loadHandled();
 /** True while a dialog is on screen — polling must not stack prompts. */
 let prompting = false;
+/** Session we last announced a pause for, so it is said once rather than every tick. */
+let pausedFor = null;
 /** The capture this agent started, if any. Held so shutdown can end it properly. */
 let activeCapture = null;
 
@@ -145,8 +150,29 @@ export function findMeeting(windows) {
   return null;
 }
 
-/** Identity that survives a title changing mid-meeting (participants joining). */
-const keyFor = (window) => `${window.bundleID}:${window.windowID}`;
+/**
+ * Chrome decorates titles with transient markers — the 🔊 that appears while a tab
+ * plays audio comes and goes mid-call. Stripping them keeps a meeting's identity
+ * stable for as long as it runs.
+ */
+export function normalizeTitle(title) {
+  return (title ?? "")
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Identity of a meeting, not of a window.
+ *
+ * Keyed on the window *and* its title. Window alone survives a title flickering
+ * mid-call, but it also means a second meeting started in the same Chrome window
+ * is treated as already handled and never offered — which is exactly what
+ * happened to an instant Meet started after an earlier call. Title alone flickers.
+ * Both together are stable within a meeting and distinct across meetings.
+ */
+export const keyFor = (window) =>
+  `${window.bundleID}:${window.windowID}:${normalizeTitle(window.title)}`;
 
 function escapeAppleScript(text) {
   return text.replace(/[\\"]/g, (c) => `\\${c}`);
@@ -386,6 +412,10 @@ async function tick() {
   // works, so health is written from that instead of probing for it.
   const active = readActive(MEETEY_DIR);
   if (active) {
+    if (pausedFor !== active.sessionId) {
+      pausedFor = active.sessionId;
+      log(`recording ${active.sessionId} in progress — window checks paused until it ends`);
+    }
     writeHealth(healthCtx, {
       at: new Date().toISOString(),
       canSeeWindows: true,
@@ -394,6 +424,7 @@ async function tick() {
     return;
   }
 
+  pausedFor = null;
   const windows = listWindows();
   const meeting = findMeeting(windows);
 
@@ -439,6 +470,16 @@ function selfTest() {
     w("us.zoom.xos", "Zoom Webinar"),
     w("com.microsoft.teams", "Standup | Meeting"),
   ];
+  const instant = [
+    // An instant meeting can be titled just "Meet" — no dash to match on.
+    w("com.google.Chrome", "Meet"),
+    w("com.google.Chrome", "Meet - abc-defg-hij"),
+    w("com.google.Chrome", "meet.google.com/abc-defg-hij"),
+  ];
+  for (const window of instant) {
+    if (!findMeeting([window])) failures.push(`missed instant meeting: "${window.title}"`);
+  }
+
   const shouldNotMatch = [
     w("com.google.Chrome", "Inbox (48) - Gmail"),
     w("com.google.Chrome", "meetey/README.md at main"),
@@ -458,6 +499,26 @@ function selfTest() {
   const mixed = [w("com.google.Chrome", "Inbox (48) - Gmail"), w("us.zoom.xos", "Zoom Meeting")];
   if (findMeeting(mixed)?.bundleID !== "us.zoom.xos") {
     failures.push("did not find a meeting behind an unrelated window");
+  }
+
+  // Meeting identity. Keyed on window alone, a second meeting in the same Chrome
+  // window reads as already handled and is never offered — which is what happened
+  // to an instant Meet started after an earlier call.
+  const winA = { bundleID: "com.google.Chrome", windowID: 7, title: "Meet - First call" };
+  const winB = { bundleID: "com.google.Chrome", windowID: 7, title: "Meet - Second call" };
+  if (keyFor(winA) === keyFor(winB)) {
+    failures.push("a different meeting in the same window shares a key — it would never be offered");
+  }
+
+  // ...but the same meeting must keep one identity while Chrome flickers its
+  // audio indicator on and off, or the loop comes back.
+  const quiet = { bundleID: "com.google.Chrome", windowID: 7, title: "Meet - First call" };
+  const loud = { bundleID: "com.google.Chrome", windowID: 7, title: "Meet - First call 🔊" };
+  if (keyFor(quiet) !== keyFor(loud)) {
+    failures.push("the audio indicator changes a meeting's key — it would be re-offered mid-call");
+  }
+  if (normalizeTitle("Meet - Run the Business 🔊  ") !== "Meet - Run the Business") {
+    failures.push(`normalizeTitle left decoration: "${normalizeTitle("Meet - Run the Business 🔊  ")}"`);
   }
 
   // Choice parsing. Getting this wrong records the wrong thing silently — the
@@ -481,7 +542,7 @@ function selfTest() {
   }
 
   if (failures.length === 0) {
-    console.log(`selftest: PASS (${shouldMatch.length} matched, ${shouldNotMatch.length} correctly ignored, ${choices.length} dialog choices parsed)`);
+    console.log(`selftest: PASS (${shouldMatch.length + instant.length} matched, ${shouldNotMatch.length} correctly ignored, meeting identity stable, ${choices.length} dialog choices parsed)`);
     process.exit(0);
   }
   for (const f of failures) console.error(`selftest: FAIL — ${f}`);
