@@ -1,6 +1,6 @@
 {
   "name": "meetey-mcp-server",
-  "version": "1.5.2",
+  "version": "2.0.0",
   "type": "module",
   "main": "index.js",
   "license": "Apache-2.0",
