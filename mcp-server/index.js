@@ -148,9 +148,9 @@ function listWindows({ bundleID } = {}) {
       // ScreenCaptureKit works at the window level and has no concept of a tab.
       // Saying so here keeps the skill from implying a precision it cannot deliver.
       message:
-        "Titles come from each window's active tab. A single Chrome tab cannot be " +
-        "captured on its own — to isolate a meeting, drag its tab into its own window " +
-        "and select that.",
+        "Titles come from each window's active tab. Picking one tells Meetey which display " +
+        "the meeting is on; it does not narrow the capture. Screen capture always covers " +
+        "everything the app displays, so close or mute anything sensitive first.",
     };
   } catch (e) {
     return { error: e.message };
@@ -851,9 +851,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           windowID: {
             type: "number",
             description:
-              "Capture only this window of the app, from list_windows. Ignored unless " +
-              "captureVideo is on. Keeps the app's other windows and its notification " +
-              "banners out of frame entirely. Cannot select a browser tab — see list_windows.",
+              "Where the meeting is, from list_windows. Used only to pick the right display " +
+              "on a multi-monitor setup — it does NOT narrow what is captured. Screen capture " +
+              "always covers everything the app displays.",
           },
         },
       },

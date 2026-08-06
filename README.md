@@ -162,9 +162,9 @@ Meetey can also capture what was on screen — slides, screen shares, code, diag
 /meetey start --audio-only  Record audio only, don't ask
 ```
 
-**Choose a window, not just an app.** After you opt in, Claude lists the app's windows by title — `Weekly Sync — Google Meet` rather than "all of Chrome" — and capturing one window keeps the app's other windows and its notification banners out of frame entirely. If more than one display is attached you'll be asked which; otherwise Meetey picks the one showing the meeting.
+**Screen capture covers everything the app displays** — other tabs, other windows, notification banners. Close or mute anything sensitive before opting in.
 
-ScreenCaptureKit has no concept of a browser tab, so a window is as fine as macOS allows. To isolate a single tab, drag it into its own window and pick that. Switching tabs inside the captured window captures the new tab.
+Narrowing it to a single window was tried and removed. Google Meet replaces its window when you join a call, and a capture aimed at the replaced window dies — taking the audio with it, because macOS tears down the whole capture connection for the process. Four recordings were lost that way. Tighter framing is not worth losing the meeting.
 
 Instead of recording video, Meetey samples the screen once a second and keeps a JPEG **only when the picture materially changes**. An hour-long meeting typically yields a few dozen keyframes rather than 3,600, which is what makes this cheap enough to be worth doing:
 

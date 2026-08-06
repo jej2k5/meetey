@@ -55,13 +55,10 @@ Meetey — local meeting capture
    > Also capture screen content (slides, screen shares, code)? This captures **everything [App Name] displays** — including other tabs, windows, and notifications — so mute or close anything sensitive first. Audio-only is the default. [y/N]
 
    Never skip this question when the user hasn't answered it, and never assume yes. Screen capture is opt-in for every single recording — there is no setting that turns it on permanently, by design.
-6. **If — and only if — the user opted into screen capture, narrow the source.** Call `list_windows` with the chosen `bundleID` and offer the titled windows as a numbered list, defaulting to the whole app:
+6. **If the user opted into screen capture, work out which display.** Call `list_displays`; when it returns one, pick it silently. When more than one is attached, call `list_windows` and ask which window the meeting is in — that answer picks the display, and matters only because getting it wrong records the wrong screen.
 
-   > Which window? Capturing just one keeps the app's other windows and its notification banners out of frame entirely.
-   > 1. Weekly Sync — Google Meet
-   > 2. Everything Chrome shows (default)
+   **Screen capture is not narrowed to a window.** It covers everything the app displays. Scoping to a window was tried and repeatedly cost recordings: replacing a captured window — which Google Meet does when you join a call — kills the whole capture, audio included. Never offer window selection as a privacy control.
 
-   Then call `list_displays`. **Only ask about the display when it returns more than one** — otherwise pick silently. Skip this whole step for audio-only recordings; there is nothing visual to narrow.
 7. Call `start_recording` with the chosen `bundleID`, `captureVideo: true` only if the user explicitly opted in, and `windowID`/`displayID` when the user chose them. Pass `label` too — the window title if one was listed, otherwise the app name — so the menu bar indicator names what it is recording rather than saying "Meeting".
 8. Confirm to the user: "Recording started[, capturing screen content from <window title>]. Stop it from the menu bar, with `/meetey stop`, or with `Ctrl+Shift+S`."
 
@@ -69,7 +66,7 @@ The recording also ends itself if the app quits, or if the chosen window closes 
 
 **Chrome note:** Chrome captures all tab audio, not just the meeting tab. Close other tabs playing audio or mute them before starting.
 
-**A single browser tab cannot be captured.** ScreenCaptureKit works at the window level and has no concept of a tab, so selecting a window narrows capture to that window — not to the tab currently shown in it. Say this plainly rather than implying tab-level control. If the user wants exactly one tab isolated, tell them to drag it into its own window and select that window. Note too that switching tabs inside the captured window captures the new tab.
+**Screen capture covers the whole app.** Not a window, and certainly not a tab. Everything Chrome displays — other tabs, other windows, notification banners — is in frame, so tell the user to close or mute anything sensitive before opting in.
 
 ---
 

@@ -1285,13 +1285,10 @@ final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
     private let writer: WAVWriter
     private let keyframes: KeyframeWriter?
 
-    /// Set after construction so a stopped stream can be identified. Audio dying
-    /// is the end of the recording; video dying costs only the screen content.
-    weak var audioStream: SCStream?
-    weak var videoStream: SCStream?
-    /// Called when audio stops, so the recording can be finalised rather than
-    /// left running against a dead stream.
-    var onAudioLost: (() -> Void)?
+    weak var captureStream: SCStream?
+    /// Called when the stream stops, so the recording is finalised rather than
+    /// left running against a dead one.
+    var onStreamLost: (() -> Void)?
 
     init(writer: WAVWriter, keyframes: KeyframeWriter?) {
         self.writer = writer
@@ -1352,15 +1349,9 @@ final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
         // Logging this and carrying on is how a 32-minute meeting became six
         // seconds of audio: the stream was dead within seconds, nothing was
         // written after, and nothing said so until the file was opened.
-        if stream === videoStream {
-            fputs("meetey-capture: screen capture stopped (\(error.localizedDescription)) — "
-                + "the captured window probably closed. Audio continues.\n", stderr)
-            videoStream = nil
-            return
-        }
-        fputs("meetey-capture: audio capture stopped (\(error.localizedDescription)) — "
+        fputs("meetey-capture: capture stopped (\(error.localizedDescription)) — "
             + "saving what was recorded\n", stderr)
-        onAudioLost?()
+        onStreamLost?()
     }
 }
 
@@ -2043,17 +2034,16 @@ func record(args: Args) async throws {
         exit(1)
     }
 
+    // `--window` no longer scopes the capture; it only says where the meeting is,
+    // so the right display is chosen on a multi-monitor setup. A window that has
+    // since been replaced is therefore harmless — Google Meet replaces its window
+    // on joining, and that must not be able to stop a recording from starting.
     var window: SCWindow? = nil
     if let requested = args.windowID {
-        guard let match = content.windows.first(where: { $0.windowID == requested }) else {
-            fputs("meetey-capture: window not found: \(requested). Run --list-windows for current IDs.\n", stderr)
-            exit(1)
+        window = content.windows.first { $0.windowID == requested }
+        if window == nil {
+            fputs("meetey-capture: window \(requested) is gone — picking the display by app instead\n", stderr)
         }
-        guard match.owningApplication?.bundleIdentifier == args.bundleID else {
-            fputs("meetey-capture: window \(requested) does not belong to \(args.bundleID)\n", stderr)
-            exit(1)
-        }
-        window = match
     }
 
     // Pick the display holding the meeting rather than whichever one happens to
@@ -2080,20 +2070,20 @@ func record(args: Args) async throws {
         exit(1)
     }
 
-    // Audio is always app-scoped, and never window-scoped.
+    // App-scoped, always. Capture is never scoped to a single window.
     //
-    // An SCStream has one filter for both audio and video, so scoping the stream
-    // to a window scopes the *audio* to that window's lifetime too. Google Meet
-    // replaces its window on joining a call, which killed the whole stream
-    // seconds in and left a 32-minute meeting as six seconds of audio. Audio is
-    // the irreplaceable part; it does not get tied to a window that the app is
-    // free to destroy.
+    // Window scoping was added to keep an app's other windows and its
+    // notification banners out of frame. It cost four recordings and is gone.
     //
-    // Video gets its own stream when a window was chosen, so the narrowing that
-    // keeps other windows and notification banners out of frame is preserved
-    // without putting the recording at risk.
-    let audioFilter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
-    let videoFilter = window.map { SCContentFilter(display: display, including: [$0]) } ?? audioFilter
+    // Google Meet replaces its window when you join a call. A stream targeting
+    // the old window dies — and ScreenCaptureKit's connection is per *process*,
+    // not per stream, so it takes every other stream in the process down with it.
+    // Splitting audio and video into two streams did not help: both died together
+    // with "application connection being interrupted", the app-scoped audio
+    // included.
+    //
+    // The framing was worth something. It was not worth the recording.
+    let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
 
     let config = SCStreamConfiguration()
     config.capturesAudio = true
@@ -2149,39 +2139,16 @@ func record(args: Args) async throws {
     let writer = try WAVWriter(path: args.outputPath)
     let delegate = CaptureDelegate(writer: writer, keyframes: keyframes)
 
-    // Audio-only config, so the audio stream never carries the cost or the
-    // fragility of a real video pipeline.
-    let audioConfig = SCStreamConfiguration()
-    audioConfig.capturesAudio = true
-    audioConfig.excludesCurrentProcessAudio = true
-    audioConfig.sampleRate = 16000
-    audioConfig.channelCount = 1
-    audioConfig.width = 2
-    audioConfig.height = 2
-
-    let audioStream = SCStream(filter: audioFilter, configuration: audioConfig, delegate: delegate)
-    try audioStream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
-    delegate.audioStream = audioStream
-
-    var videoStream: SCStream? = nil
+    // One stream. Two streams bought nothing — the connection they share is
+    // per-process, so they fail together — and cost an entire class of bug.
+    let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
+    try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
     if args.video {
-        config.capturesAudio = false
-        let separate = SCStream(filter: videoFilter, configuration: config, delegate: delegate)
-        try separate.addStreamOutput(delegate, type: .screen, sampleHandlerQueue: .global(qos: .userInitiated))
-        videoStream = separate
-        delegate.videoStream = separate
+        try stream.addStreamOutput(delegate, type: .screen, sampleHandlerQueue: .global(qos: .userInitiated))
     }
+    delegate.captureStream = stream
 
-    try await audioStream.startCapture()
-    if let videoStream {
-        do {
-            try await videoStream.startCapture()
-        } catch {
-            // Losing the screen is survivable; losing the meeting is not.
-            fputs("meetey-capture: screen capture failed to start (\(error.localizedDescription)) — continuing with audio\n", stderr)
-            delegate.videoStream = nil
-        }
-    }
+    try await stream.startCapture()
     fputs("meetey-capture: recording started\n", stderr)
 
     // Use AsyncStream to bridge DispatchSource signal handlers into async context
@@ -2210,7 +2177,7 @@ func record(args: Args) async throws {
 
     // A dead audio stream ends the recording the same way a signal does, so what
     // was captured is finalised instead of the process running on writing nothing.
-    delegate.onAudioLost = { fireOnce() }
+    delegate.onStreamLost = { fireOnce() }
 
     if let timeout = args.stopAfter {
         Task {
@@ -2329,8 +2296,7 @@ func record(args: Args) async throws {
 
     for await _ in stopStream { break }
 
-    try? await audioStream.stopCapture()
-    if let videoStream { try? await videoStream.stopCapture() }
+    try? await stream.stopCapture()
     if let indicator {
         await MainActor.run { indicator.remove() }
     }
@@ -2427,8 +2393,8 @@ Task {
                   --label <text>            What to call this recording in the menu
                   --display <id>            Display to capture (default: the one
                                             showing the target app)
-                  --window <id>             Capture only this window of the app,
-                                            excluding its other windows and banners
+                  --window <id>             Where the meeting is, used only to pick
+                                            the display. Does not scope the capture
                   --video                   Also capture screen keyframes (off by default)
                   --fps <n>                 Frames sampled per second (default 1)
                   --frames-dir <path>       Keyframe output directory

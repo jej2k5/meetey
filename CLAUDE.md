@@ -409,23 +409,27 @@ never granted, a PATH without Homebrew, a stream delivering nothing. None of tha
 reachable from a unit test; all of it is reachable in ten seconds here. **When a
 capture bug is reported, extend `--verify` before fixing it.**
 
-## Audio and video are separate streams
+## One stream, app-scoped. Never window-scoped.
 
-An `SCStream` has **one filter for both**, so scoping a stream to a window scopes
-its *audio* to that window's lifetime. Google Meet replaces its window when you
-join a call, which killed the whole stream seconds in and turned a 32-minute
-meeting into six seconds of audio and zero keyframes.
+Capture is a **single** `SCStream` with an app filter. Both alternatives were tried
+this week and both cost recordings.
 
-So `record()` builds two streams: audio always app-scoped, video window-scoped when
-a window was chosen. The window narrowing that keeps other windows and notification
-banners out of frame is preserved without making the recording depend on a window
-the app is free to destroy. Audio is the irreplaceable part — **never scope it to
-anything the app controls the lifetime of.**
+Window scoping was added to keep an app's other windows and notification banners
+out of frame. Google Meet replaces its window when you join a call, and a stream
+targeting the replaced window dies. Worse, **ScreenCaptureKit's connection is
+per-process, not per-stream**: when one stream's target goes, every stream in the
+process goes with it, with `application connection being interrupted`.
 
-`didStopWithError` acts rather than only logging. Video stopping is survivable and
-says so; audio stopping ends the recording through the same path as a signal, so
-what was captured is finalised instead of the process running on writing nothing.
-Logging and continuing is precisely how the six-second recording happened.
+So splitting audio and video into two streams — the fix for the first failure —
+did not isolate them. Both died together, app-scoped audio included, seconds into
+a call. Four recordings were lost across the two designs.
+
+`--window` survives only as a hint for *which display* the meeting is on, and a
+window that has since been replaced is now harmless rather than fatal. Screen
+capture covers everything the app displays; say so plainly and never present
+window selection as a privacy control.
+
+**The framing was worth something. It was not worth the recording.**
 
 ## The shareable-content query has a deadline
 
