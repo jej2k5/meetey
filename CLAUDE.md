@@ -254,6 +254,22 @@ empty — no GUI session, e.g. over ssh. A missing indicator must never take the
 recording down with it. `--label` names what is being recorded; the skill passes
 the window title, the watcher passes the meeting window's title.
 
+## Auto-stop watches the app, never the window
+
+A closed window does **not** end a recording. Audio is app-scoped and survives it,
+so a closed window costs screen content and nothing else.
+
+This was a loop: capture starts scoped to a window, Google Meet recreates that
+window on joining a call, auto-stop sees it gone and kills the recording after the
+grace period, the watcher then offers the same meeting again — every minute,
+indefinitely. Two changes were needed and only one was made: decoupling audio from
+the window in 1.5.2 without also stopping auto-stop from watching it.
+
+The watcher's `handled` set covers **skipped and recorded** windows alike. Marking
+only skips meant a finished recording immediately re-offered the same meeting,
+which is what turned any early stop into a loop. It is cleared when the window goes
+away, so a genuinely new meeting is still offered.
+
 ## Call-end detection
 
 `--stop-when-call-ends` (on by default from `start_recording`; `stopWhenCallEnds:

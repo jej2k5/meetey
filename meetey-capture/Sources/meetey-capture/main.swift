@@ -1251,18 +1251,18 @@ struct AutoStopMonitor {
 
     init(grace: TimeInterval) { self.grace = grace }
 
-    /// `windowPresent` is nil when the recording was not scoped to one window.
     /// Returns a human-readable reason once the condition has held continuously
     /// for the grace period, nil until then.
-    mutating func update(appRunning: Bool, windowPresent: Bool?, at now: Date) -> String? {
-        let reason: String?
-        if !appRunning {
-            reason = "the app is no longer running"
-        } else if windowPresent == false {
-            reason = "the captured window was closed"
-        } else {
-            reason = nil
-        }
+    ///
+    /// Deliberately does **not** consider whether the captured window still
+    /// exists. Audio is app-scoped and survives a window closing, so a closed
+    /// window costs screen content and nothing else — ending the recording for it
+    /// destroys a meeting that is still going. Google Meet recreates its window
+    /// on joining a call, which made that a loop: capture starts, the window is
+    /// replaced, auto-stop kills the recording, the watcher offers the meeting
+    /// again, repeat every minute.
+    mutating func update(appRunning: Bool, at now: Date) -> String? {
+        let reason: String? = appRunning ? nil : "the app is no longer running"
 
         // Recovered. Windows are legitimately destroyed and recreated — Zoom does
         // it entering full screen — so a blip must not end the meeting.
@@ -1583,54 +1583,39 @@ func selfTest() throws {
     func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
 
     var healthy = AutoStopMonitor(grace: 30)
-    for s in stride(from: 0.0, through: 300, by: 5) {
-        if healthy.update(appRunning: true, windowPresent: true, at: at(s)) != nil {
+    for s in stride(from: 0.0, through: 3600, by: 5) {
+        if healthy.update(appRunning: true, at: at(s)) != nil {
             failures.append("autostop: ended a healthy recording at \(Int(s))s")
             break
         }
     }
 
-    // No window selected: only the app quitting can end the recording.
-    var appOnly = AutoStopMonitor(grace: 30)
-    for s in stride(from: 0.0, through: 300, by: 5) {
-        if appOnly.update(appRunning: true, windowPresent: nil, at: at(s)) != nil {
-            failures.append("autostop: ended an app-scoped recording with the app still running")
-            break
-        }
-    }
-
     var quit = AutoStopMonitor(grace: 30)
-    if quit.update(appRunning: false, windowPresent: nil, at: at(0)) != nil {
+    if quit.update(appRunning: false, at: at(0)) != nil {
         failures.append("autostop: fired immediately instead of waiting out the grace period")
     }
-    if quit.update(appRunning: false, windowPresent: nil, at: at(25)) != nil {
+    if quit.update(appRunning: false, at: at(25)) != nil {
         failures.append("autostop: fired at 25s with a 30s grace period")
     }
-    if quit.update(appRunning: false, windowPresent: nil, at: at(30)) == nil {
+    if quit.update(appRunning: false, at: at(30)) == nil {
         failures.append("autostop: did not fire once the grace period elapsed")
     }
 
-    // A window destroyed and recreated — Zoom does this entering full screen —
-    // must reset the clock rather than accumulate toward a stop.
+    // An app that vanishes briefly and comes back — a relaunch, a hiccup in the
+    // lookup — must reset the clock rather than accumulate toward a stop.
     var blip = AutoStopMonitor(grace: 30)
-    _ = blip.update(appRunning: true, windowPresent: false, at: at(0))
-    _ = blip.update(appRunning: true, windowPresent: false, at: at(20))
-    if blip.update(appRunning: true, windowPresent: true, at: at(25)) != nil {
-        failures.append("autostop: fired on a recovered window")
+    _ = blip.update(appRunning: false, at: at(0))
+    _ = blip.update(appRunning: false, at: at(20))
+    if blip.update(appRunning: true, at: at(25)) != nil {
+        failures.append("autostop: fired on an app that came back")
     }
-    if blip.update(appRunning: true, windowPresent: false, at: at(40)) != nil {
-        failures.append("autostop: did not reset the grace clock after the window came back")
+    if blip.update(appRunning: false, at: at(40)) != nil {
+        failures.append("autostop: did not reset the grace clock after the app returned")
     }
-    if blip.update(appRunning: true, windowPresent: false, at: at(75)) == nil {
-        failures.append("autostop: did not fire after the window closed again for a full grace period")
+    if blip.update(appRunning: false, at: at(75)) == nil {
+        failures.append("autostop: did not fire after the app was gone for a full grace period")
     }
-
-    var closed = AutoStopMonitor(grace: 30)
-    _ = closed.update(appRunning: true, windowPresent: false, at: at(0))
-    if closed.update(appRunning: true, windowPresent: false, at: at(30)) == nil {
-        failures.append("autostop: a closed captured window did not end the recording")
-    }
-    print("  autostop: grace period, blip recovery, app-quit and window-close all behave")
+    print("  autostop: only the app quitting ends a recording; a closed window never does")
 
     // --- Call end: never cut a live meeting, never keep the silence. ----------
     // A recording where no app ever took the microphone is not a call, and must
@@ -2321,7 +2306,6 @@ func record(args: Args) async throws {
 
     if args.autoStop {
         let targetBundleID = args.bundleID
-        let targetWindowID = args.windowID
         Task {
             var monitor = AutoStopMonitor(grace: args.autoStopGrace)
             while true {
@@ -2334,18 +2318,7 @@ func record(args: Args) async throws {
                 let appRunning = !NSRunningApplication
                     .runningApplications(withBundleIdentifier: targetBundleID).isEmpty
 
-                var windowPresent: Bool? = nil
-                if let id = targetWindowID {
-                    // A failed query means we don't know, not that the window is
-                    // gone. Treating a transient error as "ended" would cut a
-                    // live meeting short.
-                    guard let content = try? await shareableContent() else { continue }
-                    windowPresent = content.windows.contains { $0.windowID == id }
-                }
-
-                if let reason = monitor.update(appRunning: appRunning,
-                                               windowPresent: windowPresent,
-                                               at: Date()) {
+                if let reason = monitor.update(appRunning: appRunning, at: Date()) {
                     fputs("meetey-capture: auto-stop — \(reason)\n", stderr)
                     fireOnce()
                     return

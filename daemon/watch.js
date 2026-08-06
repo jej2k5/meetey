@@ -75,32 +75,37 @@ const log = (msg) => console.log(`[${new Date().toISOString()}] ${msg}`);
 const healthCtx = { meeteyDir: MEETEY_DIR, home: HOME };
 
 /**
- * Windows already skipped, so the agent asks once and then stays quiet.
+ * Windows this agent has already dealt with — skipped **or** recorded.
  *
- * Persisted because launchd restarts this process on crash, logout, and reboot,
- * and an in-memory set means a meeting you already declined gets re-offered
- * partway through.
+ * Recording one has to count. Without it, the moment a recording ends the same
+ * meeting is offered again, so anything that stops a recording early becomes a
+ * prompt-record-stop loop repeating every minute. Skipping and recording are
+ * both "handled"; neither should be asked about twice.
+ *
+ * Cleared when the window goes away, so a genuinely new meeting is offered
+ * normally. Persisted because launchd restarts this process on crash, logout and
+ * reboot, and an in-memory set means a decision gets re-litigated mid-meeting.
  */
-const DECLINED_PATH = join(MEETEY_DIR, "state", "watch-declined.json");
+const HANDLED_PATH = join(MEETEY_DIR, "state", "watch-handled.json");
 
-function loadDeclined() {
+function loadHandled() {
   try {
-    return new Set(JSON.parse(readFileSync(DECLINED_PATH, "utf8")));
+    return new Set(JSON.parse(readFileSync(HANDLED_PATH, "utf8")));
   } catch {
     return new Set();
   }
 }
 
-function saveDeclined() {
+function saveHandled() {
   try {
-    mkdirSync(dirname(DECLINED_PATH), { recursive: true });
-    writeFileSync(DECLINED_PATH, JSON.stringify([...declined]) + "\n");
+    mkdirSync(dirname(HANDLED_PATH), { recursive: true });
+    writeFileSync(HANDLED_PATH, JSON.stringify([...handled]) + "\n");
   } catch {
     // Losing this costs one redundant prompt, never a recording.
   }
 }
 
-const declined = loadDeclined();
+const handled = loadHandled();
 /** True while a dialog is on screen — polling must not stack prompts. */
 let prompting = false;
 /** The capture this agent started, if any. Held so shutdown can end it properly. */
@@ -382,19 +387,21 @@ async function tick() {
   // window asks again.
   const live = new Set(windows.map(keyFor));
   let pruned = false;
-  for (const key of declined) if (!live.has(key)) { declined.delete(key); pruned = true; }
-  if (pruned) saveDeclined();
+  for (const key of handled) if (!live.has(key)) { handled.delete(key); pruned = true; }
+  if (pruned) saveHandled();
 
-  if (!meeting || declined.has(keyFor(meeting))) return;
+  if (!meeting || handled.has(keyFor(meeting))) return;
 
   prompting = true;
   try {
     const mode = askToRecord(meeting);
+    // Marked before the branch: recording a window counts as handling it just as
+    // much as skipping does, and forgetting that is what created the loop.
+    handled.add(keyFor(meeting));
+    saveHandled();
     if (mode) {
       startRecording(meeting, mode);
     } else {
-      declined.add(keyFor(meeting));
-      saveDeclined();
       log(`skipped — ${meeting.title}`);
     }
   } finally {
