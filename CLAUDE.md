@@ -430,6 +430,17 @@ active-recording check so health keeps updating during a recording. It destroyed
 the thing it was reporting on. A recording in progress is itself proof the capture
 path works — write health from that, never probe for it.
 
+`update` **restarts the watch agent** when it is enabled. launchd keeps running
+whatever it loaded, so replacing files on disk changes nothing until the agent
+restarts — an update that fixes the agent otherwise fixes nothing, while the user
+reasonably believes they are on the new version. That is how a recording-killing
+bug survived being fixed and shipped.
+
+`verify` writes active state for the duration of its capture, so a watch agent
+stands aside rather than interrupting the very check meant to find interruptions.
+It also fails when the capture runs short of the requested duration: an
+interrupted stream previously reported "0.3s written" as a tick and passed.
+
 `refuseWhileRecording()` enforces this at the MCP boundary rather than trusting
 callers. When adding anything that inspects the screen, the question is not
 "is this cheap" but "could this run while a recording is live".

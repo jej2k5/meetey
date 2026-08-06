@@ -17,7 +17,8 @@
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { green, yellow, red } from "../utils.js";
-import { BINARY_PATH, MODEL_PATH } from "../paths.js";
+import { BINARY_PATH, MODEL_PATH, MEETEY_DIR } from "../paths.js";
+import { writeActive, clearActive } from "../../mcp-server/session-state.js";
 import { resolveWhisper } from "../../mcp-server/whisper.js";
 
 /**
@@ -36,8 +37,24 @@ export function verify({ quiet = false } = {}) {
     return false;
   }
 
-  // The capture half: permission, stream, bytes on disk, header validity.
-  const capture = spawnSync(BINARY_PATH, ["--verify"], { stdio: quiet ? "pipe" : "inherit" });
+  // Announce this as a live capture for its duration. A watch agent that polls
+  // for windows would otherwise interrupt it — the same way it interrupts a real
+  // recording — and the check would report a fault it had caused itself.
+  writeActive(MEETEY_DIR, {
+    pid: process.pid,
+    sessionId: "meetey-verify",
+    outputPath: null,
+    framesDir: null,
+    startedAt: new Date().toISOString(),
+    startedBy: "verify",
+  });
+
+  let capture;
+  try {
+    capture = spawnSync(BINARY_PATH, ["--verify"], { stdio: quiet ? "pipe" : "inherit" });
+  } finally {
+    clearActive(MEETEY_DIR);
+  }
   const captureOk = capture.status === 0;
   if (quiet && !captureOk) process.stdout.write(capture.stdout?.toString() ?? "");
 
