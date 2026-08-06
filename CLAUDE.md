@@ -409,6 +409,31 @@ never granted, a PATH without Homebrew, a stream delivering nothing. None of tha
 reachable from a unit test; all of it is reachable in ten seconds here. **When a
 capture bug is reported, extend `--verify` before fixing it.**
 
+## Nothing queries the capture subsystem while a capture is running
+
+This is the most important rule in the project, and breaking it destroyed
+recordings for two days.
+
+Every call into ScreenCaptureKit — `--list-apps`, `--list-displays`,
+`--list-windows`, `SCShareableContent.current` — opens a connection to macOS's
+capture service. **A second connection from the same app displaces the first**, and
+the live recording dies with `application connection being interrupted`. It takes
+every stream in the process with it, because the connection is per-process.
+
+The watch agent polled for windows every ten seconds, including during a
+recording, so every recording died at the first tick after it started — about
+eight seconds in, audio-only or not. Recordings made before that polling was
+introduced ran for over half an hour; every one after it died in seconds.
+
+It arrived as an observability improvement: list windows *before* the
+active-recording check so health keeps updating during a recording. It destroyed
+the thing it was reporting on. A recording in progress is itself proof the capture
+path works — write health from that, never probe for it.
+
+`refuseWhileRecording()` enforces this at the MCP boundary rather than trusting
+callers. When adding anything that inspects the screen, the question is not
+"is this cheap" but "could this run while a recording is live".
+
 ## One stream, app-scoped. Never window-scoped.
 
 Capture is a **single** `SCStream` with an app filter. Both alternatives were tried

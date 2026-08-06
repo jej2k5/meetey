@@ -372,15 +372,29 @@ function startRecording(window, mode) {
 async function tick() {
   if (prompting) return;
 
-  // Listed before the active-recording check so health keeps being reported
-  // during a recording — otherwise `enable` run mid-recording waits for a
-  // verdict that never comes.
+  // NOTHING may touch the capture subsystem while a recording is running.
+  //
+  // `--list-windows` opens its own connection to macOS's capture service, and a
+  // second connection from the same app displaces the first: the live recording
+  // dies with "application connection being interrupted". Polling for windows
+  // every ten seconds meant every recording died at the first tick after it
+  // started — roughly eight seconds in, whether or not screen capture was on.
+  //
+  // An earlier version of this function listed windows first so health kept
+  // updating during a recording. That observability nicety destroyed the thing it
+  // was reporting on. A recording in progress is itself proof the capture path
+  // works, so health is written from that instead of probing for it.
+  const active = readActive(MEETEY_DIR);
+  if (active) {
+    writeHealth(healthCtx, {
+      at: new Date().toISOString(),
+      canSeeWindows: true,
+      note: `recording ${active.sessionId} — window checks paused`,
+    });
+    return;
+  }
+
   const windows = listWindows();
-
-  // Someone is already recording — this agent, or a /meetey start in an open
-  // Claude Code session. Two captures of one meeting is worse than none.
-  if (readActive(MEETEY_DIR)) return;
-
   const meeting = findMeeting(windows);
 
   // Forget declines for windows that are gone, so the next meeting in a reused
