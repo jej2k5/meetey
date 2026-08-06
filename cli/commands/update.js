@@ -18,7 +18,7 @@ import { execFileSync } from "child_process";
 import { existsSync, cpSync } from "fs";
 import { join } from "path";
 import { green, yellow, red, step, run } from "../utils.js";
-import { PKG_DIR, CAPTURE_DIR, BINARY_PATH, SERVER_DIR, DAEMON_DIR, SKILL_PATH } from "../paths.js";
+import { PKG_DIR, CAPTURE_DIR, BINARY_PATH, SERVER_DIR, DAEMON_DIR, SKILL_PATH, MEETEY_DIR, HOME } from "../paths.js";
 import { registerMcpServer, installSkill, registerKeybindings } from "./install.js";
 
 export async function update() {
@@ -77,6 +77,30 @@ export async function update() {
   step("Updating Claude Code shortcuts");
   registerKeybindings();
   green("Shortcuts updated (they work while Claude Code is focused)");
+
+  // Restart the watch agent so it runs the code just installed.
+  //
+  // launchd keeps running whatever it loaded at boot, so replacing the files on
+  // disk changes nothing until the agent restarts. An update that fixes the
+  // agent therefore does not fix anything — the old code keeps running, and the
+  // user reasonably believes they are on the new version. This is how a
+  // recording-killing bug survived being fixed.
+  const { watchStatus, enableWatch } = await import("../../mcp-server/watch-agent.js");
+  const watchCtx = { meeteyDir: MEETEY_DIR, home: HOME };
+  if (watchStatus(watchCtx).enabled) {
+    step("Restarting the watch agent on the new code");
+    const restarted = enableWatch({
+      ...watchCtx,
+      nodePath: process.execPath,
+      captureBinary: BINARY_PATH,
+    });
+    if (restarted.error) {
+      yellow(`Could not restart the watcher: ${restarted.error}`);
+      if (restarted.fix) console.log(`  ${restarted.fix}`);
+    } else {
+      green("Watcher restarted");
+    }
+  }
 
   // Prove it works rather than assuming. A rebuilt binary is re-signed, so macOS
   // treats it as new and the permission it had may not carry over — which is

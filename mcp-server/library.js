@@ -214,7 +214,7 @@ export function scanLibrary(recordingsDir) {
     .sort((a, b) => (b.recordedAt ?? "").localeCompare(a.recordedAt ?? ""));
 }
 
-export function listRecordings(recordingsDir, { since, until, hasVideo, quality, limit } = {}) {
+export function listRecordings(recordingsDir, { since, until, hasVideo, quality, hasNotes, limit } = {}) {
   let records = scanLibrary(recordingsDir);
 
   if (since) records = records.filter((r) => r.date && r.date >= since);
@@ -222,6 +222,10 @@ export function listRecordings(recordingsDir, { since, until, hasVideo, quality,
   if (hasVideo === true) records = records.filter((r) => r.hasVideo);
   if (hasVideo === false) records = records.filter((r) => !r.hasVideo);
   if (quality) records = records.filter((r) => r.quality === quality);
+  // `hasNotes: false` is "recorded but never written up" — the recordings the
+  // watcher leaves behind while nobody is at the keyboard.
+  if (hasNotes === true) records = records.filter((r) => r.files?.notes);
+  if (hasNotes === false) records = records.filter((r) => r.files?.audio && !r.files?.notes);
 
   const total = records.length;
   if (limit && limit > 0) records = records.slice(0, limit);

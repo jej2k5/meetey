@@ -1,5 +1,5 @@
 ---
-description: "Capture and transcribe meeting audio, optionally with screen content, and manage the meeting library. Commands: start | stop | status | list | show | search | delete | doctor"
+description: "Capture and transcribe meeting audio, optionally with screen content, and manage the meeting library. Commands: start | stop | status | watch | writeup | list | show | search | delete | doctor"
 ---
 
 # Meetey Skill
@@ -34,6 +34,7 @@ Meetey — local meeting capture
   /meetey status   Check if a recording is active
 
   /meetey watch    Ask to record meetings automatically (off by default)
+  /meetey writeup  Write notes for meetings recorded while you were away
 
   /meetey list     Browse past meetings
   /meetey show     Open one meeting's notes
@@ -252,6 +253,34 @@ the session has frames and the user is not using `--keep-notes`.
 
 ---
 
+## `/meetey writeup`
+
+Writes notes for recordings that were captured but never written up — which is what
+the watcher leaves behind whenever it records a meeting you never came back to.
+
+1. Call `list_recordings` with `hasNotes: false`. Those are recordings with audio and
+   no notes.
+2. If there are none, say so in one line and stop. "Everything's written up."
+3. Otherwise show what is waiting — date, duration, quality — newest first, and write
+   up the most recent unless the user asks for more or names one. Offer the rest.
+4. For each one being written up:
+   - **The transcript almost certainly already exists.** The watcher writes
+     `<sessionId>-transcript.md` as soon as a recording ends. Read it rather than
+     re-deriving it; `transcribe` also reuses whisper's cached output, so calling it
+     is cheap, but never transcribe from scratch when a transcript is on disk.
+   - Call `get_keyframes` when the record has a `frames` directory.
+   - Produce the same document as `/meetey stop`, following the Output section below.
+   - **Rename** the session transcript to `<notes-stem>-transcript.md` rather than
+     writing a second one.
+
+Say plainly when a recording is old — a meeting from three days ago written up now is
+still useful, but the user should know which day they are reading about.
+
+This is deliberately separate from `/meetey stop`, which acts on the recording that
+just finished. `writeup` is for the pile that accumulated while nobody was looking.
+
+---
+
 ## `/meetey watch`
 
 Turns the meeting watcher on and off. The watcher is a background agent that notices
@@ -280,9 +309,12 @@ recording on its own, and the prompt lets the user pick audio only or audio + sc
 so it is not something to switch on helpfully because a user just missed a recording —
 offer it, and let them answer. Turning it *off* on request needs no such hesitation.
 
-Say plainly what it does not do: it does not detect that a *call* ended. A recording stops
-when the app quits or the captured window closes, not when a meeting wraps up while the
-app stays open.
+**How a recording ends.** It stops when the app quits, or when the call itself ends —
+detected by the meeting app releasing the microphone, then confirmed over ten quiet
+minutes before anything is committed, with the recording trimmed back to when the call
+actually finished. Closing a window does not end it. Describe it in those terms rather
+than promising it "knows when your meeting is over": a call that keeps the microphone
+open, or a participant who never unmutes, will run on until the app quits.
 
 ---
 
@@ -305,9 +337,9 @@ If asked about recording meetings automatically, describe what actually exists: 
 optional watcher (`/meetey watch on`, or `npx jej2k5/meetey watch enable` in a terminal —
 there is no bare `meetey` command on PATH) that notices meetings in Chrome,
 Zoom, and Teams and **asks** before recording, offering audio only or audio + screen. It is off until enabled and
-never records on its own. Do not describe it as detecting when a meeting *ends* — a
-recording stops when the app quits or the captured window closes, not when a call wraps
-up while the app stays open.
+never records on its own. A recording ends when the call ends or the app quits, and the
+transcript is written automatically; `/meetey writeup` adds the notes for anything
+recorded while the user was away.
 
 ---
 

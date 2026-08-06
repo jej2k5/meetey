@@ -60,6 +60,13 @@ Joining the library is the non-obvious part. Three independently-named things ha
 
 **`mcp-server/quality.js`** — Deterministic transcript assessment, kept out of `index.js` so it stays unit-testable. `wavDurationMs()` reads the exact length from the WAV header rather than subtracting wall-clock start/stop (which includes process spin-up and the SIGTERM drain). `assessQuality()` grades a transcript `good`/`fair`/`poor`/`unusable` from fragment rate, whisper looping, and speech pace measured against *spoken* time — so a quiet meeting isn't penalised for its silences. Each segment counts toward `degradedRatio` at most once; summing the categories independently lets the ratio exceed 1.0.
 
+**`/meetey writeup`** exists because the watcher and Claude do different halves of
+the job. Transcription is local and automatic; notes need Claude and therefore wait
+for a session. Without it only the single most recent recording was reachable, via
+`/meetey stop` — anything that piled up while nobody was at the keyboard had no
+route at all. It reads the transcript the watcher already wrote rather than
+re-deriving it.
+
 **`skill/SKILL.md`** — The `/meetey` slash command. Capture subcommands: `start` drives `list_apps → start_recording`; `stop` drives `stop_recording → transcribe → get_keyframes` and writes two files; `status` calls `get_status`. Library subcommands map one-to-one onto the admin tools — `list`, `show`, `search`, `delete`, `doctor` for `list_recordings`, `get_recording`, `search_recordings`, `delete_recording`, `system_status`.
 
 The admin tools were reachable by natural language from the start; the subcommands exist because that made them undiscoverable — nothing in the skill menu revealed the library existed. Both routes are supported and neither is the canonical one, so don't redirect a user from one to the other. `system_status` is `doctor` rather than anything containing "status" because `/meetey status` already means "is a recording running".
@@ -67,8 +74,15 @@ The admin tools were reachable by natural language from the start; the subcomman
 ## The watch agent
 
 **`daemon/watch.js`** — a launchd LaunchAgent that notices meetings and *asks*
-whether to record them. Off until `meetey watch enable`; `disable`, `status`, and
+whether to record them. Off until `npx jej2k5/meetey watch enable`; `disable`, `status`, and
 `logs` round out the CLI (`cli/commands/watch.js`).
+
+**A meeting's identity is its window *and* its normalised title**, not the window
+alone. Window-only meant a second meeting started in the same Chrome window read as
+already handled and was silently never offered — an instant Meet after an earlier
+call simply never prompted. Title-only flickers, because Chrome adds and removes a
+🔊 marker while a tab plays audio. Both together are stable within a call and
+distinct across calls; `normalizeTitle` strips the decoration.
 
 **It never starts a recording on its own.** Every recording it produces was
 authorised by someone choosing a capture mode in a dialog naming the specific window.
@@ -408,6 +422,42 @@ that has cost a recording lived one layer down, in the environment: a permission
 never granted, a PATH without Homebrew, a stream delivering nothing. None of that is
 reachable from a unit test; all of it is reachable in ten seconds here. **When a
 capture bug is reported, extend `--verify` before fixing it.**
+
+## Nothing queries the capture subsystem while a capture is running
+
+This is the most important rule in the project, and breaking it destroyed
+recordings for two days.
+
+Every call into ScreenCaptureKit — `--list-apps`, `--list-displays`,
+`--list-windows`, `SCShareableContent.current` — opens a connection to macOS's
+capture service. **A second connection from the same app displaces the first**, and
+the live recording dies with `application connection being interrupted`. It takes
+every stream in the process with it, because the connection is per-process.
+
+The watch agent polled for windows every ten seconds, including during a
+recording, so every recording died at the first tick after it started — about
+eight seconds in, audio-only or not. Recordings made before that polling was
+introduced ran for over half an hour; every one after it died in seconds.
+
+It arrived as an observability improvement: list windows *before* the
+active-recording check so health keeps updating during a recording. It destroyed
+the thing it was reporting on. A recording in progress is itself proof the capture
+path works — write health from that, never probe for it.
+
+`update` **restarts the watch agent** when it is enabled. launchd keeps running
+whatever it loaded, so replacing files on disk changes nothing until the agent
+restarts — an update that fixes the agent otherwise fixes nothing, while the user
+reasonably believes they are on the new version. That is how a recording-killing
+bug survived being fixed and shipped.
+
+`verify` writes active state for the duration of its capture, so a watch agent
+stands aside rather than interrupting the very check meant to find interruptions.
+It also fails when the capture runs short of the requested duration: an
+interrupted stream previously reported "0.3s written" as a tick and passed.
+
+`refuseWhileRecording()` enforces this at the MCP boundary rather than trusting
+callers. When adding anything that inspects the screen, the question is not
+"is this cheap" but "could this run while a recording is live".
 
 ## One stream, app-scoped. Never window-scoped.
 

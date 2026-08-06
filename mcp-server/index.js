@@ -102,9 +102,39 @@ function runCaptureBinary(args) {
   return execFileSync(CAPTURE_BINARY, args, { encoding: "utf8" });
 }
 
+/**
+ * Refuses to inspect the screen while a recording is running.
+ *
+ * Every listing opens its own connection to macOS's capture service, and a second
+ * connection from the same app displaces the first — the live recording dies with
+ * "application connection being interrupted". The watch agent polling for windows
+ * every ten seconds killed every recording at the first tick after it started.
+ *
+ * The rule is absolute: **nothing queries the capture subsystem while a capture is
+ * running.** Enforced here rather than trusted to callers, because the cost of
+ * getting it wrong is the meeting.
+ */
+function refuseWhileRecording(what) {
+  if (activeRecording) {
+    return { error: `A recording is in progress. ${what} would interrupt it — stop the recording first.` };
+  }
+  const elsewhere = readActive(MEETEY_DIR);
+  if (elsewhere) {
+    return {
+      error:
+        `A recording is in progress (session ${elsewhere.sessionId}). ${what} would ` +
+        `interrupt it — stop the recording first.`,
+    };
+  }
+  return null;
+}
+
 // --- Tool handlers ---
 
 function listApps() {
+  const busy = refuseWhileRecording("Listing apps");
+  if (busy) return busy;
+
   if (!existsSync(CAPTURE_BINARY)) {
     return { error: `meetey-capture binary not found at ${CAPTURE_BINARY}. Run: npx jej2k5/meetey install` };
   }
@@ -121,6 +151,9 @@ function listApps() {
 }
 
 function listDisplays() {
+  const busy = refuseWhileRecording("Listing displays");
+  if (busy) return busy;
+
   if (!existsSync(CAPTURE_BINARY)) {
     return { error: `meetey-capture binary not found at ${CAPTURE_BINARY}. Run: npx jej2k5/meetey install` };
   }
@@ -133,6 +166,8 @@ function listDisplays() {
 }
 
 function listWindows({ bundleID } = {}) {
+  const busy = refuseWhileRecording("Listing windows");
+  if (busy) return busy;
   if (!existsSync(CAPTURE_BINARY)) {
     return { error: `meetey-capture binary not found at ${CAPTURE_BINARY}. Run: npx jej2k5/meetey install` };
   }
@@ -426,8 +461,8 @@ function unwrittenRecordings() {
         date: r.date ?? null,
       })),
       hint:
-        `${unwritten.length} recording(s) have audio but no notes. The most recent is ` +
-        `${latest.sessionId}; call transcribe with its wavPath to write it up.`,
+        `${unwritten.length} recording(s) have audio but no notes — the most recent is ` +
+        `${latest.sessionId}. /meetey writeup handles these.`,
     };
   } catch {
     return {};
@@ -914,6 +949,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["good", "fair", "poor", "unusable"],
             description: "Only recordings whose transcript scored this quality level.",
+          },
+          hasNotes: {
+            type: "boolean",
+            description:
+              "false returns recordings that have audio but no notes — captured and never written up, " +
+              "which is what the watcher leaves behind when nobody is at the keyboard.",
           },
           limit: { type: "number", description: "Return at most this many (still reports the full match count)." },
         },

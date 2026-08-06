@@ -2000,10 +2000,18 @@ func verify(seconds: TimeInterval = 6) async throws {
     try? await stream.stopCapture()
     let captured = writer.finalize()
 
+    let capturedSeconds = writer.seconds(forDataBytes: captured)
     if captured == 0 {
         bad("Audio reaches the file", "no audio was captured — the stream started but delivered nothing")
+    } else if capturedSeconds < seconds * 0.5 {
+        // A capture that stops early is the failure this check exists to find.
+        // Reporting "0.3s written" as a tick let an interrupted stream pass as
+        // healthy, which is exactly the fault being hunted.
+        bad("Capture runs to completion",
+            String(format: "only %.1fs of %.0fs — the stream was interrupted. Something else is talking to "
+                 + "the capture service; a running watch agent is the usual cause.", capturedSeconds, seconds))
     } else {
-        ok("Audio reaches the file", String(format: "%.1fs written", writer.seconds(forDataBytes: captured)))
+        ok("Audio reaches the file", String(format: "%.1fs of %.0fs", capturedSeconds, seconds))
     }
 
     if declaredMidway == 0 && captured > WAVWriter.headerRefreshBudget {
