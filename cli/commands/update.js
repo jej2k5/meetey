@@ -78,5 +78,16 @@ export async function update() {
   registerKeybindings();
   green("Shortcuts updated (they work while Claude Code is focused)");
 
-  green("\nMeetey updated. Restart Claude Code to pick up changes.");
+  // Prove it works rather than assuming. A rebuilt binary is re-signed, so macOS
+  // treats it as new and the permission it had may not carry over — which is
+  // exactly how a watcher ends up installed, running, and unable to record.
+  step("Checking this machine can record");
+  const { verify } = await import("./verify.js");
+  const ready = verify();
+
+  if (ready) {
+    green("\nMeetey updated. Restart Claude Code to pick up changes.");
+  } else {
+    yellow("\nMeetey updated, but this machine cannot record yet — fix the above first.");
+  }
 }

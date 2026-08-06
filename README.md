@@ -302,6 +302,16 @@ Meetey status
   ✔  Claude Code shortcuts  (Ctrl+Shift+R / Ctrl+Shift+S, while Claude Code is focused)
 ```
 
+### Checking it works
+
+```bash
+npx jej2k5/meetey verify
+```
+
+Records for a few seconds and checks the whole path: Screen Recording permission, that the stream delivers audio, that it reaches the file, that the file stays readable while being written, and that whisper and its model are present. Install and update run it automatically and tell you plainly if the machine cannot record.
+
+Worth running after any macOS update, or whenever a recording looks wrong.
+
 ### Staying current
 
 `npx jej2k5/meetey status` tells you whether a newer version has been released:

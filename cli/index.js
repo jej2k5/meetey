@@ -25,6 +25,7 @@ Commands:
             model, registers the MCP server and /meetey skill in Claude Code
   update    Rebuild the Swift binary and refresh the MCP server and skill
   status    Show what's installed and whether everything is wired up correctly
+  verify    Prove this machine can record and transcribe, by doing both
   watch     Watch for meetings and offer to record them
             (enable | disable | status | logs)
 
@@ -50,6 +51,10 @@ switch (command) {
     const { status } = await import("./commands/status.js");
     await status();
     break;
+  }
+  case "verify": {
+    const { verify } = await import("./commands/verify.js");
+    process.exit(verify() ? 0 : 1);
   }
   case "watch": {
     const { watch } = await import("./commands/watch.js");

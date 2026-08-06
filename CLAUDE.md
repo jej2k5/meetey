@@ -370,6 +370,29 @@ node mcp-server/index.js   # must answer tools/list
 node daemon/watch.js --selftest
 ```
 
+## The WAV is valid at every moment, not only at the end
+
+The header's two size fields are refreshed every 64 KB (~2s of audio) rather than
+written once at `finalize()`. **This is the property that makes an interrupted
+recording survivable.** Before it, a recording was an unreadable stub for its whole
+duration and became a real file at the last instant — so a closed window, a killed
+process, or a hang destroyed all of it. Every recording lost so far was lost this
+way, and `repairWavHeader` exists only to salvage files written under the old
+behaviour.
+
+## `--verify` runs the real thing
+
+`meetey-capture --verify` performs an actual short capture and checks permission,
+stream start, bytes reaching disk, and that the header stayed current mid-write.
+`npx jej2k5/meetey verify` adds whisper and the model, and install and update both
+run it and refuse to claim success when it fails.
+
+This exists because the selftests cover logic and pass reliably while every failure
+that has cost a recording lived one layer down, in the environment: a permission
+never granted, a PATH without Homebrew, a stream delivering nothing. None of that is
+reachable from a unit test; all of it is reachable in ten seconds here. **When a
+capture bug is reported, extend `--verify` before fixing it.**
+
 ## Audio and video are separate streams
 
 An `SCStream` has **one filter for both**, so scoping a stream to a window scopes

@@ -37,10 +37,11 @@
 import { spawn, execFileSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { dirname, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { readActive, writeActive, clearActive, writePending, activeStatePath } from "../mcp-server/session-state.js";
 import { writeHealth, watchPaths } from "../mcp-server/watch-agent.js";
 import { resolveWhisper } from "../mcp-server/whisper.js";
+import { writeSessionTranscript } from "../mcp-server/transcript.js";
 
 const HOME = homedir();
 const MEETEY_DIR = process.env.MEETEY_HOME ?? join(HOME, ".meetey");
@@ -236,7 +237,21 @@ function transcribeInBackground(wavPath) {
   ], { stdio: ["ignore", "ignore", "pipe"] });
 
   child.on("exit", (code) => {
-    log(code === 0 ? "transcription ready" : `transcription failed (exit ${code})`);
+    if (code !== 0) {
+      log(`transcription failed (exit ${code})`);
+      return;
+    }
+    // Turn it into something readable straight away. Notes need Claude; a
+    // transcript does not, and leaving the meeting as a JSON blob until someone
+    // opens an editor is how a recording ends up never being read at all.
+    const result = writeSessionTranscript({
+      recordingsDir: RECORDINGS_DIR,
+      sessionId: basename(wavPath, ".wav"),
+      jsonPath: `${wavPath}.json`,
+    });
+    log(result.written
+      ? `transcript ready: ${result.path} (${result.segments} segments)`
+      : `transcription ready but no transcript written: ${result.reason}`);
   });
   child.on("error", (e) => log(`transcription failed: ${e.message.split("\n")[0]}`));
 }

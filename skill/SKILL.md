@@ -78,15 +78,16 @@ The recording also ends itself if the app quits, or if the chosen window closes 
 ### Gather
 
 1. Call `stop_recording`. If it errors with no active recording but returns `hint`/`unwritten`, **do not stop there** — those are recordings that were captured and never written up. Say how many, name the most recent, and offer to write it up now by calling `transcribe` with its `wavPath` and continuing through this flow as normal. If the result has `autoStopped: true`, the recording had already ended by itself — carry on with the transcription exactly as normal, and mention the reason once ("the recording had already stopped — [autoStopReason]") rather than treating it as an error.
-2. Call `transcribe` with the returned `outputPath`. It returns:
+2. **A transcript may already exist.** The watcher writes `<sessionId>-transcript.md` as soon as a recording ends, so check for it before doing the work again. When you write the notes, **rename that file** to `<notes-stem>-transcript.md` rather than writing a new one — two transcripts for one meeting is worse than either.
+3. Call `transcribe` with the returned `outputPath`. It reuses the cached whisper output when it is current, so this is usually instant. It returns:
    - `transcript` — the full text
    - `segments` — `{ text, fromMs, toMs }` per utterance
    - `durationMs` / `durationLabel` — exact length, read from the WAV header
    - `model` — the Whisper model that produced this
    - `quality` — `{ level, reason, spokenWordsPerMinute, degradedRatio, silenceRatio }`, where `level` is `good`, `fair`, `poor`, or `unusable`
-3. If the stop result includes `framesDir`, call `get_keyframes` with it. Each frame has `path`, `offsetMs`, and usually `ocrText`. A frame may also have `revisitsMs`: later offsets at which that same screen came back on stage. Treat those as additional timestamps for the same content — a slide the group returned to is usually one they argued about, and it is worth a Screen Content line at the offset it came back, not just when it first appeared.
-4. If transcription fails, report the error and point the user at the Troubleshooting table in the README.
-5. If the result carries `recovered`, say so once: the recording had been interrupted and its audio was salvaged. It explains a duration that looks different from what the user remembers, and it is reassuring rather than alarming — the audio was not lost.
+4. If the stop result includes `framesDir`, call `get_keyframes` with it. Each frame has `path`, `offsetMs`, and usually `ocrText`. A frame may also have `revisitsMs`: later offsets at which that same screen came back on stage. Treat those as additional timestamps for the same content — a slide the group returned to is usually one they argued about, and it is worth a Screen Content line at the offset it came back, not just when it first appeared.
+5. If transcription fails, report the error and point the user at the Troubleshooting table in the README.
+6. If the result carries `recovered`, say so once: the recording had been interrupted and its audio was salvaged. It explains a duration that looks different from what the user remembers, and it is reassuring rather than alarming — the audio was not lost.
 
 ### Interpret
 

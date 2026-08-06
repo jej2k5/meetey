@@ -34,6 +34,7 @@ struct Args {
     let displayID: UInt32?
     let windowID: UInt32?
     let selfTest: Bool
+    let verifyMode: Bool
     let video: Bool
     let fps: Int
     let framesDir: String?
@@ -62,6 +63,7 @@ struct Args {
         var displayID: UInt32? = nil
         var windowID: UInt32? = nil
         var selfTest = false
+        var verifyMode = false
         var video = false
         var fps = 1
         var framesDir: String? = nil
@@ -92,6 +94,7 @@ struct Args {
             case "--display":         displayID = UInt32(it.next() ?? "")
             case "--window":          windowID = UInt32(it.next() ?? "")
             case "--selftest":        selfTest = true
+            case "--verify":          verifyMode = true
             case "--video":           video = true
             case "--fps":             fps = max(1, Int(it.next() ?? "") ?? 1)
             case "--frames-dir":      framesDir = it.next()
@@ -115,7 +118,7 @@ struct Args {
         return Args(bundleID: bundleID, outputPath: outputPath, stopAfter: stopAfter,
                     listApps: listApps, listDisplays: listDisplays, listWindows: listWindows,
                     displayID: displayID, windowID: windowID,
-                    selfTest: selfTest, video: video, fps: fps,
+                    selfTest: selfTest, verifyMode: verifyMode, video: video, fps: fps,
                     framesDir: framesDir, ocr: ocr, sceneThreshold: sceneThreshold,
                     maxFrames: maxFrames, maxUnsettled: maxUnsettled,
                     volatilityMask: volatilityMask, autoStop: autoStop,
@@ -213,7 +216,38 @@ final class WAVWriter {
         counterLock.lock()
         dataByteCount += UInt32(data.count)
         if audible { lastAudibleByteCount = dataByteCount }
+        bytesSinceHeaderRefresh += UInt32(data.count)
+        let needsRefresh = bytesSinceHeaderRefresh >= Self.headerRefreshInterval
+        if needsRefresh { bytesSinceHeaderRefresh = 0 }
+        let sizeNow = dataByteCount
         counterLock.unlock()
+
+        if needsRefresh { writeSizes(dataBytes: sizeNow) }
+    }
+
+    /// How much audio may accumulate before the header is brought up to date.
+    /// 64 KB is two seconds at 16 kHz mono 16-bit — small enough that a file is
+    /// never meaningfully stale, cheap enough to be invisible (two seeks and
+    /// eight bytes).
+    static let headerRefreshBudget: UInt32 = 64_000
+    private static let headerRefreshInterval: UInt32 = headerRefreshBudget
+    private var bytesSinceHeaderRefresh: UInt32 = 0
+
+    /// Brings the two size fields up to date, then returns to appending.
+    ///
+    /// **This is what makes the file valid while it is being written.** Writing
+    /// the sizes only at `finalize()` meant a recording was an unreadable stub
+    /// for its entire duration and became a real file at the last instant — so
+    /// any interruption, at any point in an hour, destroyed all of it. A closed
+    /// window, a killed process, a hang: every one of those produced a file that
+    /// looked empty despite containing the whole meeting.
+    private func writeSizes(dataBytes: UInt32) {
+        func le<T: FixedWidthInteger>(_ v: T) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
+        fileHandle.seek(toFileOffset: 4)
+        fileHandle.write(le(36 + dataBytes))
+        fileHandle.seek(toFileOffset: 40)
+        fileHandle.write(le(dataBytes))
+        fileHandle.seekToEndOfFile()
     }
 
     /// Closes the file. `trimmingToDataBytes` cuts the recording back to an
@@ -1732,6 +1766,39 @@ func selfTest() throws {
     }
     print("  menubar: titles truncate from the middle, clock and spoken durations format correctly")
 
+    // --- The file has to be readable *during* the recording, not only after. --
+    // Everything lost so far was lost this way: a recording is a stub until
+    // finalize, so any interruption in an hour destroyed all of it.
+    let livePath = root.appendingPathComponent("live.wav").path
+    let live = try WAVWriter(path: livePath)
+    // Ten seconds, appended the way capture does — well past the refresh interval.
+    for _ in 0..<10 { live.append(samples: [Int16](repeating: 0, count: 16000)) }
+
+    // Read the header without finalizing, exactly as an interrupted file would be.
+    let midHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: livePath))
+    midHandle.seek(toFileOffset: 4)
+    let midRiff = midHandle.readData(ofLength: 4).withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+    midHandle.seek(toFileOffset: 40)
+    let midData = midHandle.readData(ofLength: 4).withUnsafeBytes { $0.load(as: UInt32.self).littleEndian }
+    try? midHandle.close()
+
+    let expected: UInt32 = 16000 * 2 * 10
+    // The header trails by at most one refresh interval, never by the whole file.
+    if midData == 0 {
+        failures.append("live: header still declares 0 mid-recording — an interrupted file would be unreadable")
+    }
+    if midData + WAVWriter.headerRefreshBudget < expected {
+        failures.append("live: header is \(expected - midData) bytes behind, more than one refresh interval")
+    }
+    if midRiff != midData + 36 {
+        failures.append("live: RIFF size does not match the data size mid-recording")
+    }
+    let finalBytes2 = live.finalize()
+    if finalBytes2 != expected {
+        failures.append("live: finalize reported \(finalBytes2), expected \(expected)")
+    }
+    print("  live: header stays current while recording (\(midData)/\(expected) bytes visible mid-write)")
+
     if failures.isEmpty {
         print("selftest: PASS (settling, volatility mask, cadence, revisit dedup, unsettled valve, auto-stop, call-end trim, OCR + manifest OK)")
         exit(0)
@@ -1867,6 +1934,116 @@ func printJSON<T: Encodable>(_ value: T) throws {
 func displayContaining(_ window: SCWindow, in content: SCShareableContent) -> SCDisplay? {
     let centre = CGPoint(x: window.frame.midX, y: window.frame.midY)
     return content.displays.first { $0.frame.contains(centre) }
+}
+
+/// An end-to-end check of the capture path, run against the real system.
+///
+/// The selftest covers logic and passes reliably; every failure that has actually
+/// cost a recording lived one layer down, in the environment — Screen Recording
+/// permission, a PATH without Homebrew, a stream that never delivered. None of
+/// that is reachable from a unit test, and all of it is reachable in ten seconds
+/// here.
+///
+/// Exits non-zero if the machine cannot record, so install and update can refuse
+/// to claim success.
+func verify(seconds: TimeInterval = 6) async throws {
+    var problems: [String] = []
+    func ok(_ label: String, _ detail: String = "") {
+        print("  ✓ \(label)\(detail.isEmpty ? "" : "  \(detail)")")
+    }
+    func bad(_ label: String, _ detail: String) {
+        print("  ✗ \(label)  \(detail)")
+        problems.append("\(label): \(detail)")
+    }
+
+    print("Checking that this machine can actually record.\n")
+
+    // 1. Screen Recording permission. The call that hangs rather than failing
+    //    when this is unresolved, which is why it is bounded.
+    var content: SCShareableContent
+    do {
+        content = try await shareableContent(timeout: 15)
+        ok("Screen Recording permission", "\(content.applications.count) apps visible")
+    } catch {
+        bad("Screen Recording permission", error.localizedDescription)
+        print("\nCannot record without this. Grant it in System Settings > Privacy & Security > Screen Recording.")
+        exit(1)
+    }
+
+    // 2. Something to capture. Any running app proves the pipeline; a meeting app
+    //    is not required to test it.
+    guard let target = content.applications.first(where: { supportedBundleIDs.contains($0.bundleIdentifier) })
+        ?? content.applications.first(where: { !$0.applicationName.isEmpty }) else {
+        bad("An app to capture", "no applications visible")
+        exit(1)
+    }
+    ok("An app to capture", target.applicationName)
+
+    guard let display = content.displays.first else {
+        bad("A display to capture", "none found")
+        exit(1)
+    }
+    ok("A display to capture", "\(display.width)x\(display.height)")
+
+    // 3. A real capture, written to a real file.
+    let path = NSTemporaryDirectory() + "meetey-verify-\(ProcessInfo.processInfo.processIdentifier).wav"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let config = SCStreamConfiguration()
+    config.capturesAudio = true
+    config.excludesCurrentProcessAudio = true
+    config.sampleRate = 16000
+    config.channelCount = 1
+    config.width = 2
+    config.height = 2
+
+    let writer = try WAVWriter(path: path)
+    let delegate = CaptureDelegate(writer: writer, keyframes: nil)
+    let filter = SCContentFilter(display: display, including: [target], exceptingWindows: [])
+    let stream = SCStream(filter: filter, configuration: config, delegate: delegate)
+
+    do {
+        try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: .global(qos: .userInteractive))
+        try await stream.startCapture()
+        ok("Audio capture starts")
+    } catch {
+        bad("Audio capture starts", error.localizedDescription)
+        exit(1)
+    }
+
+    print("  … capturing for \(Int(seconds))s")
+    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+
+    // 4. Did the header stay current while writing? This is the property that
+    //    makes an interrupted recording survivable, so check it mid-flight.
+    let midHeader = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+    midHeader?.seek(toFileOffset: 40)
+    let declaredMidway = midHeader?.readData(ofLength: 4).withUnsafeBytes { $0.load(as: UInt32.self).littleEndian } ?? 0
+    try? midHeader?.close()
+
+    try? await stream.stopCapture()
+    let captured = writer.finalize()
+
+    if captured == 0 {
+        bad("Audio reaches the file", "no audio was captured — the stream started but delivered nothing")
+    } else {
+        ok("Audio reaches the file", String(format: "%.1fs written", writer.seconds(forDataBytes: captured)))
+    }
+
+    if declaredMidway == 0 && captured > WAVWriter.headerRefreshBudget {
+        bad("File stays readable while recording", "header was still empty mid-capture")
+    } else {
+        ok("File stays readable while recording")
+    }
+
+    print("")
+    if problems.isEmpty {
+        print("Ready to record.")
+        exit(0)
+    }
+    print("Not ready to record:")
+    for problem in problems { print("  - \(problem)") }
+    exit(1)
 }
 
 func record(args: Args) async throws {
@@ -2238,6 +2415,8 @@ Task {
                 exit(0)
             }
             // Held by IndicatorHost for the life of the process; AppKit drives it.
+        } else if args.verifyMode {
+            try await verify()
         } else if args.selfTest {
             try selfTest()
         } else if args.listApps {
@@ -2250,6 +2429,7 @@ Task {
             guard !args.bundleID.isEmpty, !args.outputPath.isEmpty else {
                 fputs("""
                 Usage: meetey-capture --app <bundle-id> --output <path.wav> [options]
+                       meetey-capture --verify
                        meetey-capture --list-apps
                        meetey-capture --list-displays
                        meetey-capture --list-windows [--app <bundle-id>]

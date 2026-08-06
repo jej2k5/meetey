@@ -115,7 +115,18 @@ export async function install() {
 
   // --- Done ---
   printPermissionReminder();
-  green("Meetey installed! Start a meeting and run /meetey in Claude Code, or press Ctrl+Shift+R.");
+  // Prove it works rather than assuming. A rebuilt binary is re-signed, so macOS
+  // treats it as new and the permission it had may not carry over — which is
+  // exactly how a watcher ends up installed, running, and unable to record.
+  step("Checking this machine can record");
+  const { verify } = await import("./verify.js");
+  const ready = verify();
+
+  if (ready) {
+    green("Meetey installed! Start a meeting and run /meetey in Claude Code, or press Ctrl+Shift+R.");
+  } else {
+    yellow("Meetey is installed, but this machine cannot record yet — fix the above first.");
+  }
 }
 
 export function registerMcpServer() {
