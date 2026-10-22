@@ -1,18 +1,20 @@
 {
   "version": 1,
   "limits": {
-    "max_phase_attempts": 12,
+    "max_phase_attempts": 6,
     "max_review_format_attempts": 4,
-    "max_semantic_review_attempts": 20,
-    "max_debate_rounds": 6,
-    "max_phase_minutes": 180,
-    "max_consecutive_failures": 3
+    "max_semantic_review_attempts": 10,
+    "max_debate_rounds": 3,
+    "max_phase_minutes": 120,
+    "max_consecutive_failures": 3,
+    "max_daily_cost_usd": 80
   },
   "git": {
     "remote": "origin",
     "push": false,
     "create_pr": false,
-    "merge": false
+    "merge": false,
+    "integration_branch": "main"
   },
   "roles": {
     "implementer": {
@@ -29,7 +31,8 @@
         "{output}",
         "{prompt}"
       ],
-      "remediation_prompt": "prompts/remediation/codex-remediation.md"
+      "prompt_lineage": "meetey-v3",
+      "credential_env": []
     },
     "reviewer": {
       "vendor": "anthropic",
@@ -44,7 +47,24 @@
         "--tools",
         "Read,Grep,Glob"
       ],
-      "review_prompt": "prompts/reviews/claude-adversarial-review.md"
+      "prompt_lineage": "meetey-v3",
+      "protocol_version": "buildctl-review-v2",
+      "credential_env": [],
+      "context_documents": [
+        "docs/MEETEY_V3_ARCHITECTURE.md",
+        "docs/PRODUCT.md",
+        "CLAUDE.md",
+        "README.md"
+      ]
+    },
+    "arbiter": {
+      "network": false,
+      "auth_mode": "none",
+      "credential_env": [],
+      "mode": "interactive",
+      "command": [
+        "agent-debate"
+      ]
     }
   },
   "milestones": {
@@ -60,12 +80,7 @@
       15,
       20
     ],
-    "release_gates": [
-      7,
-      14,
-      19,
-      24
-    ]
+    "mvp_completion": 14
   },
   "phase_defaults": {
     "required_files": [
@@ -96,7 +111,7 @@
     ],
     "claude_review_required": true,
     "debate_on_architecture_disagreement": true,
-    "max_remediation_attempts": 8,
+    "max_remediation_attempts": 4,
     "merge_policy": "auto",
     "allowed_paths": [
       "cli/",
@@ -244,5 +259,17 @@
         "merge_policy": "human"
       }
     }
-  ]
+  ],
+  "governance_documents": [
+    "docs/MEETEY_V3_ARCHITECTURE.md",
+    "docs/PRODUCT.md",
+    "CLAUDE.md",
+    "README.md"
+  ],
+  "operation_cost_usd": {
+    "implementation": 2,
+    "review": 2,
+    "remediation": 2,
+    "debate": 5
+  }
 }
