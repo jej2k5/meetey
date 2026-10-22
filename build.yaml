@@ -1,0 +1,248 @@
+{
+  "version": 1,
+  "limits": {
+    "max_phase_attempts": 12,
+    "max_review_format_attempts": 4,
+    "max_semantic_review_attempts": 20,
+    "max_debate_rounds": 6,
+    "max_phase_minutes": 180,
+    "max_consecutive_failures": 3
+  },
+  "git": {
+    "remote": "origin",
+    "push": false,
+    "create_pr": false,
+    "merge": false
+  },
+  "roles": {
+    "implementer": {
+      "vendor": "openai",
+      "model_family": "codex",
+      "network": true,
+      "auth_mode": "host_cli",
+      "command": [
+        "codex",
+        "exec",
+        "--ignore-user-config",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--output-last-message",
+        "{output}",
+        "{prompt}"
+      ],
+      "remediation_prompt": "prompts/remediation/codex-remediation.md"
+    },
+    "reviewer": {
+      "vendor": "anthropic",
+      "model_family": "claude",
+      "network": true,
+      "auth_mode": "host_cli",
+      "command": [
+        "claude",
+        "-p",
+        "{prompt}",
+        "--no-session-persistence",
+        "--tools",
+        "Read,Grep,Glob"
+      ],
+      "review_prompt": "prompts/reviews/claude-adversarial-review.md"
+    }
+  },
+  "milestones": {
+    "evidence_foundation": 7,
+    "delegate_observer": 14,
+    "supervised_participant": 19,
+    "adaptive_delegate": 24
+  },
+  "checkpoints": {
+    "before_phases": [
+      1,
+      8,
+      15,
+      20
+    ],
+    "release_gates": [
+      7,
+      14,
+      19,
+      24
+    ]
+  },
+  "phase_defaults": {
+    "required_files": [
+      "docs/HANDOFF_PHASE_{phase}.md"
+    ],
+    "commands": [
+      [
+        "node",
+        "--check",
+        "mcp-server/index.js"
+      ],
+      [
+        "node",
+        "daemon/watch.js",
+        "--selftest"
+      ]
+    ],
+    "invariants": [
+      "local_first_evidence",
+      "explicit_delegate_identity",
+      "immutable_raw_evidence",
+      "provenance_backed_derivations",
+      "access_disclosure_action_separation",
+      "deterministic_authority",
+      "fail_closed_unknown_authority",
+      "portable_meeting_runtime",
+      "progressive_delegation"
+    ],
+    "claude_review_required": true,
+    "debate_on_architecture_disagreement": true,
+    "max_remediation_attempts": 8,
+    "merge_policy": "auto",
+    "allowed_paths": [
+      "cli/",
+      "daemon/",
+      "mcp-server/",
+      "meetey-capture/",
+      "skill/",
+      "docs/",
+      "tests/",
+      "package.json",
+      "build.yaml",
+      "prompts/"
+    ]
+  },
+  "phases": [
+    {
+      "number": 1,
+      "name": "Architecture Baseline and Behavioral Contract",
+      "prompt": "prompts/phases/phase-01-architecture-baseline-and-behavioral-contract.md"
+    },
+    {
+      "number": 2,
+      "name": "Meeting Manifest",
+      "prompt": "prompts/phases/phase-02-meeting-manifest.md"
+    },
+    {
+      "number": 3,
+      "name": "Legacy Manifest Reconstruction",
+      "prompt": "prompts/phases/phase-03-legacy-manifest-reconstruction.md"
+    },
+    {
+      "number": 4,
+      "name": "Evidence Object Model",
+      "prompt": "prompts/phases/phase-04-evidence-object-model.md"
+    },
+    {
+      "number": 5,
+      "name": "Manifest-First Library",
+      "prompt": "prompts/phases/phase-05-manifest-first-library.md"
+    },
+    {
+      "number": 6,
+      "name": "Structured Evidence Retrieval",
+      "prompt": "prompts/phases/phase-06-structured-evidence-retrieval.md"
+    },
+    {
+      "number": 7,
+      "name": "Cross-Meeting Reasoning",
+      "prompt": "prompts/phases/phase-07-cross-meeting-reasoning.md",
+      "acceptance": {
+        "merge_policy": "human"
+      }
+    },
+    {
+      "number": 8,
+      "name": "Meeting Mission Schema",
+      "prompt": "prompts/phases/phase-08-meeting-mission-schema.md"
+    },
+    {
+      "number": 9,
+      "name": "Mission Context Assembly",
+      "prompt": "prompts/phases/phase-09-mission-context-assembly.md"
+    },
+    {
+      "number": 10,
+      "name": "Mission Approval Workflow",
+      "prompt": "prompts/phases/phase-10-mission-approval-workflow.md"
+    },
+    {
+      "number": 11,
+      "name": "Delegate Identity",
+      "prompt": "prompts/phases/phase-11-delegate-identity.md"
+    },
+    {
+      "number": 12,
+      "name": "Portable Meeting Runtime",
+      "prompt": "prompts/phases/phase-12-portable-meeting-runtime.md"
+    },
+    {
+      "number": 13,
+      "name": "Local Mac Meeting Adapter",
+      "prompt": "prompts/phases/phase-13-local-mac-meeting-adapter.md"
+    },
+    {
+      "number": 14,
+      "name": "Unattended Observer",
+      "prompt": "prompts/phases/phase-14-unattended-observer.md",
+      "acceptance": {
+        "merge_policy": "human"
+      }
+    },
+    {
+      "number": 15,
+      "name": "Authority Engine and Authority Ledger",
+      "prompt": "prompts/phases/phase-15-authority-engine-and-ledger.md"
+    },
+    {
+      "number": 16,
+      "name": "Access Disclosure and Action Separation",
+      "prompt": "prompts/phases/phase-16-access-disclosure-action-separation.md"
+    },
+    {
+      "number": 17,
+      "name": "Participation Engine",
+      "prompt": "prompts/phases/phase-17-participation-engine.md"
+    },
+    {
+      "number": 18,
+      "name": "Voice Runtime",
+      "prompt": "prompts/phases/phase-18-voice-runtime.md"
+    },
+    {
+      "number": 19,
+      "name": "Escalation Ladder",
+      "prompt": "prompts/phases/phase-19-escalation-ladder.md",
+      "acceptance": {
+        "merge_policy": "human"
+      }
+    },
+    {
+      "number": 20,
+      "name": "Meeting Class Policies",
+      "prompt": "prompts/phases/phase-20-meeting-class-policies.md"
+    },
+    {
+      "number": 21,
+      "name": "Adaptive Mission Generation",
+      "prompt": "prompts/phases/phase-21-adaptive-mission-generation.md"
+    },
+    {
+      "number": 22,
+      "name": "Bounded Autonomous Participation",
+      "prompt": "prompts/phases/phase-22-bounded-autonomous-participation.md"
+    },
+    {
+      "number": 23,
+      "name": "Delegate Actions",
+      "prompt": "prompts/phases/phase-23-delegate-actions.md"
+    },
+    {
+      "number": 24,
+      "name": "Adaptive Delegate Hardening",
+      "prompt": "prompts/phases/phase-24-adaptive-delegate-hardening.md",
+      "acceptance": {
+        "merge_policy": "human"
+      }
+    }
+  ]
+}
